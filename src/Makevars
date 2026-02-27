@@ -1,16 +1,5 @@
 # Makevars for RateScape C++ compilation
-# Compiler flags for high-performance linear algebra and optimization
 
-# C++17 standard required for modern features (optional parameters, structured bindings)
 CXX_STD = CXX17
 
-# Optimization flags
-PKG_CXXFLAGS = -O3 -march=native -ffast-math -fopenmp
-PKG_LDFLAGS = -fopenmp
-
-# RcppArmadillo configuration: use OpenBLAS or system BLAS
-# (Will be handled automatically by RcppArmadillo.package.skeleton)
-
-# Parallel BLAS configuration (optional)
-# Uncomment if using OpenMP-enabled BLAS:
-# PKG_CXXFLAGS += -DARMA_USE_OPENMP
+PKG_CXXFLAGS = -O3
