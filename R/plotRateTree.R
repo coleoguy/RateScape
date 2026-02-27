@@ -125,10 +125,10 @@ get_rate_colors <- function(rate_values, palette = "diverging") {
 
   if (palette == "diverging") {
     # Blue-grey-red centered at 1
-    colors_palette <- colorspace::diverging_hcl(n_colors, palette = "RdBu")
+    colors_palette <- colorspace::diverging_hcl(n_colors, palette = "Blue-Red")
   } else if (palette == "sequential") {
     # White to orange gradient
-    colors_palette <- colorspace::sequential_hcl(n_colors, palette = "OrYe")
+    colors_palette <- colorspace::sequential_hcl(n_colors, palette = "OrYel")
   } else if (palette == "viridis") {
     # Viridis-like gradient
     colors_palette <- grDevices::hcl.colors(n_colors, palette = "viridis")
