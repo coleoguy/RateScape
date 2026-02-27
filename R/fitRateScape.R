@@ -85,13 +85,24 @@ fitRateScape <- function(
   n_accept_rj <- 0; n_prop_rj <- 0
   tau_current <- tau_init
 
-  message(sprintf("RateScape MCMC: %d gen, %d burn-in, thin=%d (%d samples), %d edges",
-                  ngen, burn_in, thin, nsamples, nedges))
+  message("──────────────────────────────────────────────────────")
+  message(sprintf("  RateScape MCMC"))
+  message(sprintf("  Tree:     %d tips, %d edges", ntips, nedges))
+  message(sprintf("  States:   k = %d", nrow(Q)))
+  message(sprintf("  Chain:    %d generations (%d burn-in + %d sampling)",
+                  niter, burn_in, ngen))
+  message(sprintf("  Thinning: every %d → %d posterior samples", thin, nsamples))
+  message("──────────────────────────────────────────────────────")
 
   # Initial likelihood + cache
   L_cache <- postorder_pass(info, states, Q, r_current)
   root_L <- L_cache[info$root, ]
   loglik_current <- log(max(sum(root_L * get_root_weights(root_L, root_prior, Q, k)), 1e-300))
+
+  message(sprintf("  Initial log-likelihood: %.2f", loglik_current))
+  message("  Starting burn-in...")
+  mcmc_start_time <- proc.time()[3]
+  last_report_time <- mcmc_start_time
 
   for (iter in 1:niter) {
     sd_slab <- sqrt(max(sigma2_current, 1e-10))
@@ -209,20 +220,80 @@ fitRateScape <- function(
       }
     }
 
-    if (iter %% 2000 == 0) {
-      message(sprintf("  Iter %d/%d [ll=%.2f, pi=%.3f, s2=%.3f, slab=%d, tau=%.3f]",
-                      iter, niter, loglik_current, pi_current, sigma2_current,
-                      sum(z_current==0), tau_current))
+    # === Progress reporting ===
+    if (iter %% 500 == 0) {
+      now <- proc.time()[3]
+      elapsed <- now - mcmc_start_time
+      pct <- iter / niter
+      eta <- elapsed / pct - elapsed  # estimated time remaining
+      phase <- if (iter <= burn_in) "burn-in" else "sampling"
+
+      # Progress bar: 30 characters wide
+      bar_width <- 30
+      filled <- round(pct * bar_width)
+      bar <- paste0("[",
+                    paste(rep("=", filled), collapse = ""),
+                    if (filled < bar_width) ">",
+                    paste(rep(" ", max(0, bar_width - filled - 1)), collapse = ""),
+                    "]")
+
+      # Format time nicely
+      fmt_time <- function(secs) {
+        if (secs < 60) return(sprintf("%.0fs", secs))
+        if (secs < 3600) return(sprintf("%.0fm %02.0fs", secs %/% 60, secs %% 60))
+        return(sprintf("%.0fh %02.0fm", secs %/% 3600, (secs %% 3600) %/% 60))
+      }
+
+      n_slab <- sum(z_current == 0)
+      message(sprintf("\r  %s %3.0f%% | %s | ll=%.1f pi=%.3f s2=%.2f slab=%d/%d | %s elapsed, ~%s left",
+                      bar, pct * 100, phase,
+                      loglik_current, pi_current, sigma2_current,
+                      n_slab, nedges,
+                      fmt_time(elapsed), fmt_time(eta)),
+              appendLF = TRUE)
+
+      # Announce phase transition
+      if (iter == burn_in) {
+        ar_burn <- if (n_prop_r > 0) n_accept_r / n_prop_r else NA
+        ar_rj_burn <- if (n_prop_rj > 0) n_accept_rj / n_prop_rj else NA
+        message(sprintf("  ── Burn-in complete (tau=%.3f, MH accept=%.1f%%, RJ accept=%.1f%%) ──",
+                        tau_current,
+                        if (!is.na(ar_burn)) ar_burn * 100 else 0,
+                        if (!is.na(ar_rj_burn)) ar_rj_burn * 100 else 0))
+        message("  Starting posterior sampling...")
+      }
     }
   }
+
+  # ── Completion summary ──
+  mcmc_elapsed <- proc.time()[3] - mcmc_start_time
+  fmt_time <- function(secs) {
+    if (secs < 60) return(sprintf("%.1fs", secs))
+    if (secs < 3600) return(sprintf("%.0fm %02.0fs", secs %/% 60, secs %% 60))
+    return(sprintf("%.0fh %02.0fm", secs %/% 3600, (secs %% 3600) %/% 60))
+  }
+
+  ar_r <- if (n_prop_r > 0) n_accept_r/n_prop_r else NA
+  ar_rj <- if (n_prop_rj > 0) n_accept_rj/n_prop_rj else NA
+
+  message("──────────────────────────────────────────────────────")
+  message(sprintf("  MCMC complete in %s", fmt_time(mcmc_elapsed)))
+  message(sprintf("  Final log-likelihood: %.2f", loglik_current))
+  message(sprintf("  MH acceptance rate:   %s",
+                  if (!is.na(ar_r)) sprintf("%.1f%%", ar_r * 100) else "N/A"))
+  message(sprintf("  RJ acceptance rate:   %s",
+                  if (!is.na(ar_rj)) sprintf("%.1f%%", ar_rj * 100) else "N/A"))
+  message(sprintf("  Final tau:            %.4f", tau_current))
+  message(sprintf("  Slab edges:           %d / %d (%.0f%%)",
+                  sum(z_current == 0), nedges, 100 * sum(z_current == 0) / nedges))
+  message(sprintf("  Posterior samples:    %d", nsamples))
+  message("──────────────────────────────────────────────────────")
 
   # Post-hoc: mean(r) = 1
   for (s in 1:nsamples) {
     rm <- mean(r_samples[s, ]); if (rm > 0) r_samples[s, ] <- r_samples[s, ] / rm
   }
 
-  ar_r <- if (n_prop_r > 0) n_accept_r/n_prop_r else NA
-  ar_rj <- if (n_prop_rj > 0) n_accept_rj/n_prop_rj else NA
   pi_prior <- a_pi/(a_pi+b_pi); pi_post <- mean(pi_samples, na.rm=TRUE)
   bf <- ((1-pi_post)/(pi_post+1e-10)) / ((1-pi_prior)/(pi_prior+1e-10))
 
