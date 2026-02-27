@@ -1,105 +1,244 @@
-#' Simulate Discrete Character Data Under Branch-Specific Rates
+#' Simulate Discrete Character Data with Branch Rate Heterogeneity
 #'
-#' Simulates discrete character evolution along a phylogeny where each branch
-#' has its own rate scalar applied to a background Q matrix.
+#' Generates discrete character datasets under the RateScape spike-and-slab
+#' or discretized gamma model. Useful for prior-predictive simulation, validation,
+#' and simulation studies.
 #'
-#' @param tree A phylo object
-#' @param Q A k x k instantaneous rate matrix
-#' @param rates Numeric vector of rate scalars, one per edge. Default: all 1.
-#' @param root_state Integer (1-indexed) specifying root state. Default: random
-#'   draw from stationary distribution of Q.
-#' @param nsim Number of independent simulations. Default 1.
-#' @return If nsim = 1, a named integer vector of tip states. If nsim > 1,
-#'   a matrix with nsim columns.
-#' @export
+#' @param tree An object of class "phylo".
+#' @param Q Transition rate matrix (k × k).
+#' @param lambda_sigma Numeric. Rate parameter for exponential prior on σ².
+#'   Ignored if rates are provided directly via r_scalars.
+#' @param pi Numeric in [0, 1]. Mixing proportion: probability that a branch
+#'   is at background rate (r = 1). Default is 0.5.
+#' @param nrep Integer. Number of independent replicates to simulate. Default is 1.
+#' @param r_scalars Numeric vector. Pre-specified branch rate scalars. If provided,
+#'   overrides the spike-and-slab prior. Default is NULL (sample from prior).
+#' @param root_state Integer or NULL. Root character state (0 to k-1).
+#'   If NULL, sampled from the root prior.
+#' @param return_rates Logical. If TRUE, also return the branch-specific rates.
+#'   Default is FALSE.
+#' @param seed Integer or NULL. Random seed for reproducibility.
+#'
+#' @details
+#'
+#' **Simulation procedure:**
+#'
+#' 1. If r_scalars is not provided, sample from the spike-and-slab prior:
+#'    - z_i ~ Bernoulli(π) (spike indicator for each branch)
+#'    - r_i = 1 if z_i = 1 (background rate)
+#'    - r_i ~ LogNormal(0, σ²) if z_i = 0 (heterogeneous rate), where σ² ~ Exp(λ_σ)
+#'
+#' 2. If a root_state is not provided, sample from the root prior.
+#'
+#' 3. Evolve the character down the tree using the Gillespie algorithm:
+#'    - At each branch with state s, compute the exit rate from s under
+#'      the scaled rate matrix r_i * Q.
+#'    - Time to transition is exponential with this rate.
+#'    - Destination state is sampled from the scaled off-diagonals of Q.
+#'
+#' 4. Repeat for nrep independent simulations.
+#'
+#' @return A list containing:
+#'   - `data`: A matrix of simulated character data (nrep rows × n_tips columns),
+#'     with rows corresponding to replicates and columns to tips.
+#'   - `rates`: (if return_rates = TRUE) List of branch rate scalars for each replicate.
+#'   - `root_states`: Root states used for each replicate.
+#'   - `tree`: The input tree.
+#'   - `call`: The function call.
+#'
 #' @examples
 #' \dontrun{
-#' library(ape)
-#' tree <- rtree(50)
-#' Q <- matrix(0.5, 3, 3)
-#' diag(Q) <- -1.0
+#'   tree <- ape::rtree(50, rooted = TRUE)
+#'   Q <- makeQ(model = "mk", k = 2)
 #'
-#' # Simulate under homogeneous rate
-#' data_homo <- simRateScape(tree, Q)
+#'   # Simulate with default spike-and-slab prior
+#'   sim1 <- simRateScape(
+#'     tree = tree,
+#'     Q = Q,
+#'     lambda_sigma = 1.0,
+#'     pi = 0.7,
+#'     nrep = 10
+#'   )
+#'   head(sim1$data)
 #'
-#' # Simulate with some branches 3x faster
-#' rates <- rep(1, Nedge(tree))
-#' rates[1:10] <- 3.0
-#' data_het <- simRateScape(tree, Q, rates = rates)
+#'   # Simulate with fixed rates
+#'   r_fixed <- rep(1, nrow(tree$edge))
+#'   r_fixed[1:5] <- 2.0  # Five branches evolving 2× faster
+#'   sim2 <- simRateScape(
+#'     tree = tree,
+#'     Q = Q,
+#'     r_scalars = r_fixed,
+#'     nrep = 10,
+#'     return_rates = TRUE
+#'   )
 #' }
-simRateScape <- function(tree, Q, rates = NULL, root_state = NULL, nsim = 1) {
+#'
+#' @export
+simRateScape <- function(
+    tree,
+    Q,
+    lambda_sigma = NULL,
+    pi = 0.5,
+    nrep = 1,
+    r_scalars = NULL,
+    root_state = NULL,
+    return_rates = FALSE,
+    seed = NULL) {
 
-  if (!inherits(tree, "phylo")) stop("tree must be a phylo object")
-  if (!is.matrix(Q)) stop("Q must be a matrix")
-
-  nstates <- nrow(Q)
-  ntip <- ape::Ntip(tree)
-  nedge <- ape::Nedge(tree)
-
-  if (is.null(rates)) rates <- rep(1.0, nedge)
-  if (length(rates) != nedge) stop("rates must have length equal to Nedge(tree)")
-
-  # Reorder for preorder traversal
-  tree <- ape::reorder.phylo(tree, "cladewise")
-
-  results <- matrix(NA_integer_, nrow = ntip, ncol = nsim)
-  rownames(results) <- tree$tip.label
-
-  for (s in 1:nsim) {
-    # Node states
-    node_states <- integer(ntip + ape::Nnode(tree))
-
-    # Root state
-    if (is.null(root_state)) {
-      pi <- stationary_dist(Q)
-      node_states[ntip + 1] <- sample(1:nstates, 1, prob = pi)
-    } else {
-      node_states[ntip + 1] <- root_state
-    }
-
-    # Traverse in preorder (cladewise)
-    for (e in 1:nedge) {
-      parent <- tree$edge[e, 1]
-      child <- tree$edge[e, 2]
-      t_eff <- rates[e] * tree$edge.length[e]
-
-      # Transition probability matrix
-      P <- expm::expm(Q * t_eff)
-
-      # Draw child state from parent
-      parent_state <- node_states[parent]
-      node_states[child] <- sample(1:nstates, 1, prob = P[parent_state, ])
-    }
-
-    results[, s] <- node_states[1:ntip]
+  if (!inherits(tree, "phylo")) {
+    stop("tree must be an object of class 'phylo'")
   }
 
-  if (nsim == 1) {
-    out <- results[, 1]
-    names(out) <- tree$tip.label
-    return(out)
+  if (!is.matrix(Q) || nrow(Q) != ncol(Q)) {
+    stop("Q must be a square matrix")
+  }
+
+  k <- nrow(Q)
+  n_tips <- length(tree$tip.label)
+  n_nodes <- n_tips + tree$Nnode
+  nedges <- nrow(tree$edge)
+
+  if (!is.null(r_scalars)) {
+    if (length(r_scalars) != nedges) {
+      stop("r_scalars must have length equal to number of edges")
+    }
+    if (any(r_scalars <= 0)) {
+      stop("All r_scalars must be positive")
+    }
   } else {
-    return(results)
+    if (is.null(lambda_sigma)) {
+      stop("Either r_scalars or lambda_sigma must be provided")
+    }
   }
+
+  if (pi < 0 || pi > 1) {
+    stop("pi must be in [0, 1]")
+  }
+
+  if (!is.null(seed)) {
+    set.seed(seed)
+  }
+
+  # Initialize output
+  data_matrix <- matrix(NA, nrow = nrep, ncol = n_tips)
+  rates_list <- if (return_rates) vector("list", nrep) else NULL
+  root_states <- numeric(nrep)
+
+  message(sprintf(
+    "Simulating %d replicate(s) on tree with %d tips and %d states",
+    nrep, n_tips, k
+  ))
+
+  # Main simulation loop
+  for (rep in 1:nrep) {
+
+    # Sample or use provided rates
+    if (is.null(r_scalars)) {
+      z <- rbinom(nedges, 1, pi)  # Spike indicators
+      sigma2 <- rexp(1, lambda_sigma)
+      r <- numeric(nedges)
+      for (i in 1:nedges) {
+        r[i] <- if (z[i] == 1) 1.0 else rlnorm(1, 0, sqrt(sigma2))
+      }
+    } else {
+      r <- r_scalars
+    }
+
+    if (return_rates) {
+      rates_list[[rep]] <- r
+    }
+
+    # Sample root state
+    if (is.null(root_state)) {
+      # FitzJohn prior: uniform for simplicity (full version uses likelihood weighting)
+      root_states[rep] <- sample(0:(k - 1), 1)
+    } else {
+      root_states[rep] <- root_state
+    }
+
+    # Evolve character down the tree
+    states_at_nodes <- integer(n_nodes)
+    states_at_nodes[n_tips + 1] <- root_states[rep]  # Root node state
+
+    # Post-order traversal: evolve states down the tree
+    for (edge_idx in 1:nedges) {
+      parent_node <- tree$edge[edge_idx, 1]
+      child_node <- tree$edge[edge_idx, 2]
+      edge_len <- tree$edge.length[edge_idx]
+
+      parent_state <- states_at_nodes[parent_node]
+
+      # Evolve under scaled Q
+      scaled_Q <- r[edge_idx] * Q
+      child_state <- evolve_state(parent_state, scaled_Q, edge_len, k)
+
+      states_at_nodes[child_node] <- child_state
+    }
+
+    # Extract tip states
+    data_matrix[rep, ] <- states_at_nodes[1:n_tips]
+
+    if (rep %% max(1, nrep / 10) == 0 || rep == 1) {
+      message(sprintf("  Replicate %d / %d", rep, nrep))
+    }
+  }
+
+  # Return result
+  result <- list(
+    data = data_matrix,
+    root_states = root_states,
+    tree = tree,
+    call = match.call()
+  )
+
+  if (return_rates) {
+    result$rates <- rates_list
+  }
+
+  class(result) <- c("ratescape_sim", "list")
+  return(result)
 }
 
 
-#' Simulate Rate Scalars from Spike-and-Slab Prior
+#' Evolve character state down a single branch
 #'
-#' Generates branch-specific rate scalars from the spike-and-slab prior
-#' used in the RateScape model. Useful for simulation studies.
+#' Implements Gillespie algorithm for character evolution under a scaled rate matrix.
 #'
-#' @param nedge Number of edges
-#' @param pi Probability of spike (background rate). Default 0.7.
-#' @param sigma2 Variance of log-normal slab. Default 0.5.
-#' @return Numeric vector of rate scalars
-#' @export
-simRates <- function(nedge, pi = 0.7, sigma2 = 0.5) {
-  z <- stats::rbinom(nedge, 1, prob = 1 - pi)  # 1 = slab (shifted)
-  rates <- rep(1.0, nedge)
-  n_slab <- sum(z)
-  if (n_slab > 0) {
-    rates[z == 1] <- stats::rlnorm(n_slab, meanlog = 0, sdlog = sqrt(sigma2))
+#' @keywords internal
+evolve_state <- function(current_state, scaled_Q, branch_length, k) {
+
+  time_remaining <- branch_length
+  state <- current_state
+
+  while (time_remaining > 0) {
+
+    # Exit rate from current state
+    exit_rate <- -scaled_Q[state + 1, state + 1]
+
+    if (exit_rate <= 0) {
+      # Absorbing state; remain in this state
+      break
+    }
+
+    # Time to next transition (exponential)
+    time_to_transition <- rexp(1, exit_rate)
+
+    if (time_to_transition > time_remaining) {
+      # No transition before branch end
+      break
+    }
+
+    # Time has passed; now transition
+    time_remaining <- time_remaining - time_to_transition
+
+    # Sample next state from transition probabilities
+    transition_rates <- scaled_Q[state + 1, -( state + 1)]
+    if (sum(transition_rates) <= 0) {
+      break
+    }
+
+    state <- sample(setdiff(0:(k - 1), state), 1, prob = transition_rates)
   }
-  return(rates)
+
+  return(state)
 }

@@ -1,124 +1,191 @@
-#' Plot Painted Phylogeny with Branch-Specific Rates
+#' Plot Rate-Painted Phylogenetic Trees
 #'
-#' Produces a phylogeny with branches colored by their estimated rate scalar,
-#' from blue (decelerated) through grey (background) to red (accelerated).
-#' Optionally highlights branches with strong support for rate shifts.
+#' Produces a phylogenetic tree visualization with branches colored by their
+#' estimated rate scalars, creating a "painted phylogeny" showing lineage-specific
+#' rate heterogeneity.
 #'
-#' @param x A fitted ratescape or ratescape_ml object
-#' @param type Character: "fan", "phylogram", or "cladogram". Default "phylogram".
-#' @param color_by Character: "mean" (posterior mean rate), "median" (posterior
-#'   median rate), or "shift_prob" (posterior probability of shift). Default "mean".
-#' @param palette A vector of 3 colors for (slow, background, fast).
-#'   Default c("blue", "grey80", "red").
-#' @param n_colors Number of colors in the gradient. Default 100.
-#' @param rate_range Numeric vector of length 2 giving the range of rates to
-#'   map to the color scale. Default NULL (auto from data).
-#' @param highlight_bf Bayes factor threshold for highlighting shifted branches.
-#'   Default NULL (no highlighting). Set to e.g. 10 for strong evidence.
-#' @param highlight_lwd Line width multiplier for highlighted branches. Default 3.
-#' @param show_legend Logical. Show color legend? Default TRUE.
-#' @param cex Tip label size. Default 0.6.
-#' @param ... Additional arguments passed to ape::plot.phylo
+#' @param x An object of class "ratescapeFit" or "ratescapeML" (from fitRateScape
+#'   or rateCategories).
+#' @param y Unused (for compatibility with plot generic).
+#' @param quantile_threshold Numeric. Posterior probability threshold for identifying
+#'   rate-shifted branches (default 0.5). Only used for Bayesian fits.
+#' @param color_palette Character. Color scheme: "diverging" (blue-grey-red, default),
+#'   "sequential" (white-orange), or "viridis".
+#' @param label_shifted Logical. If TRUE, label branches with rate shifts.
+#'   Default is FALSE.
+#' @param ... Additional arguments passed to ape::plot.phylo.
+#'
+#' @details
+#'
+#' **For Bayesian fits:**
+#'   - Branch colors represent posterior mean r_i estimates.
+#'   - Blue branches: r_i < 1 (slower evolution).
+#'   - Red branches: r_i > 1 (faster evolution).
+#'   - Grey branches: posterior probability of shift < threshold (consistent with background rate).
+#'
+#' **For ML fits:**
+#'   - Branch colors represent maximum likelihood estimates.
+#'   - Color intensity reflects the magnitude of rate deviation from 1.
+#'
+#' **Diverging palette:**
+#'   Centered at 1 (white/grey), with blue for r < 1 and red for r > 1.
+#'   This makes the background rate (r = 1) clearly visible.
+#'
+#' @return Invisibly returns the plot object (for chaining with other graphics commands).
+#'
+#' @examples
+#' \dontrun{
+#'   fit <- fitRateScape(tree, data, Q, lambda_sigma = 1.0)
+#'   plot(fit, main = "Rate-Painted Tree")
+#'
+#'   fit_ml <- rateCategories(tree, data, Q)
+#'   plot(fit_ml, color_palette = "sequential")
+#' }
+#'
 #' @export
-plotRateTree <- function(x, type = "phylogram",
-                         color_by = "mean",
-                         palette = c("blue", "grey80", "red"),
-                         n_colors = 100,
-                         rate_range = NULL,
-                         highlight_bf = NULL,
-                         highlight_lwd = 3,
-                         show_legend = TRUE,
-                         cex = 0.6, ...) {
+plotRateTree <- function(
+    x,
+    y = NULL,
+    quantile_threshold = 0.5,
+    color_palette = "diverging",
+    label_shifted = FALSE,
+    ...) {
 
-  if (!inherits(x, "ratescape")) stop("x must be a ratescape object")
+  if (inherits(x, "ratescapeFit")) {
+    return(plot_bayesian_tree(x, quantile_threshold, color_palette, label_shifted, ...))
+  } else if (inherits(x, "ratescapeML")) {
+    return(plot_ml_tree(x, color_palette, ...))
+  } else {
+    stop("x must be of class 'ratescapeFit' or 'ratescapeML'")
+  }
+}
+
+
+#' Plot Bayesian painted tree
+#'
+#' @keywords internal
+plot_bayesian_tree <- function(x, quantile_threshold, color_palette, label_shifted, ...) {
 
   tree <- x$tree
+  r_samples <- x$mcmc_samples$r
+  z_samples <- x$mcmc_samples$z
 
-  # Get rates to color by
-  if (inherits(x, "ratescape_ml")) {
-    rates <- x$branch_rates
-    has_bf <- FALSE
+  # Compute posterior summaries
+  r_mean <- colMeans(r_samples)
+  prob_shifted <- colMeans(z_samples == 0)
+
+  # For display: mark branches with low probability of shift as background (r ≈ 1)
+  r_display <- r_mean
+  r_display[prob_shifted < quantile_threshold] <- 1.0
+
+  # Create color palette
+  colors <- get_rate_colors(r_display, palette = color_palette)
+
+  # Plot tree with colored edges
+  plot(tree, edge.color = colors, edge.width = 1.5, ...)
+
+  # Add legend
+  add_rate_legend(r_display, palette = color_palette)
+
+  invisible(NULL)
+}
+
+
+#' Plot ML painted tree
+#'
+#' @keywords internal
+plot_ml_tree <- function(x, color_palette, ...) {
+
+  tree <- x$tree
+  best_fit <- x$best_fit
+
+  # Extract rate estimates from best fit
+  r_estimates <- best_fit$rates
+
+  # Create color palette
+  colors <- get_rate_colors(r_estimates, palette = color_palette)
+
+  # Plot tree
+  plot(tree, edge.color = colors, edge.width = 1.5, ...)
+
+  # Add legend
+  add_rate_legend(r_estimates, palette = color_palette)
+
+  invisible(NULL)
+}
+
+
+#' Generate colors for rate values
+#'
+#' @keywords internal
+get_rate_colors <- function(rate_values, palette = "diverging") {
+
+  n_colors <- 100
+  r_range <- range(rate_values, na.rm = TRUE)
+
+  if (palette == "diverging") {
+    # Blue-grey-red centered at 1
+    colors_palette <- colorspace::diverging_hcl(n_colors, palette = "RdBu")
+  } else if (palette == "sequential") {
+    # White to orange gradient
+    colors_palette <- colorspace::sequential_hcl(n_colors, palette = "OrYe")
+  } else if (palette == "viridis") {
+    # Viridis-like gradient
+    colors_palette <- grDevices::hcl.colors(n_colors, palette = "viridis")
   } else {
-    if (color_by == "mean") {
-      rates <- x$rate_means
-    } else if (color_by == "median") {
-      rates <- x$rate_medians
-    } else if (color_by == "shift_prob") {
-      rates <- x$shift_probs
-    } else {
-      stop("color_by must be 'mean', 'median', or 'shift_prob'")
-    }
-    has_bf <- TRUE
+    stop("Unknown palette: ", palette)
   }
 
-  # Build color gradient
-  color_func <- grDevices::colorRampPalette(palette)
-  colors <- color_func(n_colors)
-
-  # Map rates to colors
-  if (is.null(rate_range)) {
-    if (color_by == "shift_prob") {
-      rate_range <- c(0, 1)
-    } else {
-      # Symmetric around 1
-      max_dev <- max(abs(log(rates)))
-      rate_range <- exp(c(-max_dev, max_dev))
-    }
-  }
-
-  # Map rates to color index
-  if (color_by == "shift_prob") {
-    # Linear mapping 0 to 1
-    color_idx <- round((rates - rate_range[1]) /
-                          (rate_range[2] - rate_range[1]) * (n_colors - 1)) + 1
+  # Map rate values to color indices
+  # Normalize rates to [0, 1] centered at 1
+  if (palette == "diverging") {
+    # Symmetric around 1: rates from 1/max to max map to [0, 1]
+    r_max <- max(abs(log(rate_values)))
+    color_idx <- pmin(n_colors, pmax(1, round(50 + 50 * log(rate_values) / r_max)))
   } else {
-    # Log-scale mapping centered at 1
-    log_rates <- log(rates)
-    log_range <- log(rate_range)
-    color_idx <- round((log_rates - log_range[1]) /
-                          (log_range[2] - log_range[1]) * (n_colors - 1)) + 1
-  }
-  color_idx <- pmax(1, pmin(n_colors, color_idx))
-  edge_colors <- colors[color_idx]
-
-  # Edge widths
-  edge_widths <- rep(2, ape::Nedge(tree))
-
-  # Highlight branches with strong BF
-
-  if (!is.null(highlight_bf) && has_bf) {
-    strong <- x$bayes_factors > highlight_bf
-    edge_widths[strong] <- highlight_lwd
+    # Sequential: map from min to max
+    color_idx <- pmin(n_colors, pmax(1, round((rate_values - r_range[1]) /
+                                               (r_range[2] - r_range[1]) * n_colors)))
   }
 
-  # Plot
-  ape::plot.phylo(tree, type = type,
-                  edge.color = edge_colors,
-                  edge.width = edge_widths,
-                  cex = cex, ...)
+  return(colors_palette[color_idx])
+}
 
-  # Legend
-  if (show_legend) {
-    if (color_by == "shift_prob") {
-      legend_labels <- c("0", "0.5", "1")
-      legend_title <- "P(rate shift)"
-    } else {
-      legend_labels <- c(
-        sprintf("%.2f", rate_range[1]),
-        "1.00",
-        sprintf("%.2f", rate_range[2])
-      )
-      legend_title <- "Rate scalar"
-    }
 
-    # Simple color bar via legend
-    legend_colors <- colors[c(1, n_colors / 2, n_colors)]
-    graphics::legend("bottomleft",
-                     legend = legend_labels,
-                     col = legend_colors,
-                     lwd = 4,
-                     title = legend_title,
-                     bty = "n",
-                     cex = 0.7)
+#' Add legend to rate tree plot
+#'
+#' @keywords internal
+add_rate_legend <- function(rate_values, palette = "diverging") {
+
+  r_range <- range(rate_values, na.rm = TRUE)
+
+  if (palette == "diverging") {
+    legend_text <- sprintf(
+      "Rates: blue = slow (r=%.1f), red = fast (r=%.1f), background = r=1",
+      r_range[1], r_range[2]
+    )
+  } else {
+    legend_text <- sprintf(
+      "Rates: min = %.2f, max = %.2f",
+      r_range[1], r_range[2]
+    )
   }
+
+  mtext(legend_text, side = 1, line = -1, cex = 0.8, outer = FALSE)
+}
+
+
+#' Generic plot method for RateScape fits
+#'
+#' @export
+plot.ratescapeFit <- function(x, y = NULL, ...) {
+  plotRateTree(x, ...)
+}
+
+
+#' Generic plot method for ML fits
+#'
+#' @export
+plot.ratescapeML <- function(x, y = NULL, ...) {
+  plotRateTree(x, ...)
 }

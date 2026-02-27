@@ -1,44 +1,40 @@
 Package: RateScape
-Title: Branch-Specific Rate Variation for Complex Discrete Character Models
-Version: 0.1.0
+Title: Detecting Rate Heterogeneity in Discrete Character Evolution
+Version: 1.0.0
 Authors@R: c(
-    person("Heath", "Blackmon", email = "coleoguy@gmail.com",
-           role = c("aut", "cre"),
-           comment = c(ORCID = "0000-0002-0590-2413"))
-    )
-Description: Infers branch-specific rate variation under arbitrary
-    continuous-time Markov models for discrete character evolution on
-    phylogenies. Implements a spike-and-slab Bayesian framework to identify
-    branches evolving faster or slower than the background rate, a
-    discretized-gamma maximum likelihood approach, and produces painted
-    phylogenies depicting the spatial distribution of rate heterogeneity.
-    Accepts any user-specified Q matrix, making it applicable to chromosome
-    number evolution, morphological characters, biogeographic models, and
-    other complex discrete traits. Core likelihood computations are
-    implemented in C++ via Rcpp/RcppArmadillo for performance.
+  person("Heath", "Blackmon", role = c("aut", "cre"),
+         email = "h-blackmon@tamu.edu",
+         comment = c(ORCID = "0000-0002-2140-0074")),
+  person("Claude", "Opus", role = "ctb", comment = "AI-assisted implementation")
+  )
+Description: RateScape provides Bayesian and maximum likelihood methods for
+  detecting and estimating rate heterogeneity in discrete character evolution
+  across phylogenetic trees. The package allows users to specify complex
+  rate matrices (Q matrices) and infer branch-specific rate scalars, enabling
+  the visualization of rate-shifted lineages on painted phylogenies. Implements
+  spike-and-slab mixture models (Bayesian) and discretized gamma categories (ML)
+  with comprehensive prior specification tools and diagnostic functions.
 License: GPL (>= 2)
 Encoding: UTF-8
-LazyData: true
 Roxygen: list(markdown = TRUE)
-RoxygenNote: 7.3.2
+RoxygenNote: 7.2.3
 Depends:
-    R (>= 3.5.0)
+    R (>= 4.0.0),
+    ape (>= 5.6),
+    phytools (>= 0.7-70)
 Imports:
-    ape,
-    expm,
-    phytools,
-    coda,
-    Rcpp (>= 1.0.0),
     stats,
+    graphics,
     grDevices,
-    graphics
-LinkingTo:
-    Rcpp,
-    RcppArmadillo
+    Rcpp (>= 1.0.7),
+    Matrix,
+    colorspace
 Suggests:
     testthat (>= 3.0.0),
     knitr,
     rmarkdown
-VignetteBuilder: knitr
-URL: https://github.com/coleoguy/RateScape
-BugReports: https://github.com/coleoguy/RateScape/issues
+LinkingTo:
+    Rcpp,
+    RcppArmadillo
+SystemRequirements: C++17
+LazyData: true
