@@ -124,13 +124,15 @@ get_rate_colors <- function(rate_values, palette = "diverging") {
   r_range <- range(rate_values, na.rm = TRUE)
 
   if (palette == "diverging") {
-    # Blue-grey-red centered at 1
-    colors_palette <- colorspace::diverging_hcl(n_colors, palette = "Blue-Red")
+    # Blue-grey-red centered at 1 (base R, no colorspace needed)
+    colors_palette <- grDevices::colorRampPalette(
+      c("#2166AC", "#67A9CF", "#D1E5F0", "#F7F7F7",
+        "#FDDBC7", "#EF8A62", "#B2182B"))(n_colors)
   } else if (palette == "sequential") {
-    # White to orange gradient
-    colors_palette <- colorspace::sequential_hcl(n_colors, palette = "OrYel")
+    # White to orange gradient (base R)
+    colors_palette <- grDevices::colorRampPalette(
+      c("#FFFFCC", "#FED976", "#FD8D3C", "#E31A1C"))(n_colors)
   } else if (palette == "viridis") {
-    # Viridis-like gradient
     colors_palette <- grDevices::hcl.colors(n_colors, palette = "viridis")
   } else {
     stop("Unknown palette: ", palette)
