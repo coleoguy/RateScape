@@ -2,7 +2,7 @@
 // Fast pruning algorithm with caching, matrix exponentials, and MCMC updates
 // Version: 1.0 (v2 manuscript)
 
-#include <Rcpp.h>
+// NOTE: RcppArmadillo.h must come first and Rcpp.h must NOT be included separately
 #include <RcppArmadillo.h>
 #include <cmath>
 #include <unordered_map>
@@ -90,7 +90,8 @@ NumericMatrix batchLikelihoodsCpp(IntegerMatrix tree_edges,
                                    NumericVector rate_categories) {
   int n_edges = tree_edges.nrow();
   int n_cats = rate_categories.size();
-  NumericMatrix likelihoods(n_edges, n_cats, 0.0);
+  NumericMatrix likelihoods(n_edges, n_cats);
+  std::fill(likelihoods.begin(), likelihoods.end(), 0.0);
   return likelihoods;
 }
 

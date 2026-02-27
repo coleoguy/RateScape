@@ -4,7 +4,7 @@ Version: 1.0.0
 Authors@R: c(
   person("Heath", "Blackmon", role = c("aut", "cre"),
          email = "h-blackmon@tamu.edu",
-         comment = c(ORCID = "0000-0002-2140-0074")),
+         comment = c(ORCID = "0000-0002-5433-4036")),
   person("Claude", "Opus", role = "ctb", comment = "AI-assisted implementation")
   )
 Description: RateScape provides Bayesian and maximum likelihood methods for
