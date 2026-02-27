@@ -1,0 +1,44 @@
+Package: RateScape
+Title: Branch-Specific Rate Variation for Complex Discrete Character Models
+Version: 0.1.0
+Authors@R: c(
+    person("Heath", "Blackmon", email = "coleoguy@gmail.com",
+           role = c("aut", "cre"),
+           comment = c(ORCID = "0000-0002-0590-2413"))
+    )
+Description: Infers branch-specific rate variation under arbitrary
+    continuous-time Markov models for discrete character evolution on
+    phylogenies. Implements a spike-and-slab Bayesian framework to identify
+    branches evolving faster or slower than the background rate, a
+    discretized-gamma maximum likelihood approach, and produces painted
+    phylogenies depicting the spatial distribution of rate heterogeneity.
+    Accepts any user-specified Q matrix, making it applicable to chromosome
+    number evolution, morphological characters, biogeographic models, and
+    other complex discrete traits. Core likelihood computations are
+    implemented in C++ via Rcpp/RcppArmadillo for performance.
+License: GPL (>= 2)
+Encoding: UTF-8
+LazyData: true
+Roxygen: list(markdown = TRUE)
+RoxygenNote: 7.3.2
+Depends:
+    R (>= 3.5.0)
+Imports:
+    ape,
+    expm,
+    phytools,
+    coda,
+    Rcpp (>= 1.0.0),
+    stats,
+    grDevices,
+    graphics
+LinkingTo:
+    Rcpp,
+    RcppArmadillo
+Suggests:
+    testthat (>= 3.0.0),
+    knitr,
+    rmarkdown
+VignetteBuilder: knitr
+URL: https://github.com/coleoguy/RateScape
+BugReports: https://github.com/coleoguy/RateScape/issues
