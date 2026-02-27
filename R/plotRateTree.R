@@ -9,8 +9,8 @@
 #' @param y Unused (for compatibility with plot generic).
 #' @param quantile_threshold Numeric. Posterior probability threshold for identifying
 #'   rate-shifted branches (default 0.5). Only used for Bayesian fits.
-#' @param color_palette Character. Color scheme: "diverging" (blue-grey-red, default),
-#'   "sequential" (white-orange), or "viridis".
+#' @param color_palette Character. Color scheme: "viridis" (default),
+#'   "diverging" (blue-grey-red), or "sequential" (white-orange-red).
 #' @param label_shifted Logical. If TRUE, label branches with rate shifts.
 #'   Default is FALSE.
 #' @param ... Additional arguments passed to ape::plot.phylo.
@@ -47,7 +47,7 @@ plotRateTree <- function(
     x,
     y = NULL,
     quantile_threshold = 0.5,
-    color_palette = "diverging",
+    color_palette = "viridis",
     label_shifted = FALSE,
     ...) {
 
@@ -118,7 +118,7 @@ plot_ml_tree <- function(x, color_palette, ...) {
 #' Generate colors for rate values
 #'
 #' @keywords internal
-get_rate_colors <- function(rate_values, palette = "diverging") {
+get_rate_colors <- function(rate_values, palette = "viridis") {
 
   n_colors <- 100
   r_range <- range(rate_values, na.rm = TRUE)
@@ -157,7 +157,7 @@ get_rate_colors <- function(rate_values, palette = "diverging") {
 #' Add legend to rate tree plot
 #'
 #' @keywords internal
-add_rate_legend <- function(rate_values, palette = "diverging") {
+add_rate_legend <- function(rate_values, palette = "viridis") {
 
   r_range <- range(rate_values, na.rm = TRUE)
 

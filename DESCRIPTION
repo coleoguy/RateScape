@@ -27,8 +27,7 @@ Imports:
     graphics,
     grDevices,
     Rcpp (>= 1.0.7),
-    Matrix,
-    colorspace
+    Matrix
 Suggests:
     testthat (>= 3.0.0),
     knitr,
