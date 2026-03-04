@@ -16,7 +16,7 @@ Then install from GitHub:
 
 ```r
 # install.packages("devtools")
-devtools::install_github("coleoguy/RateScape")
+devtools::install_github("coleoguy/RateScape", build_vignettes = TRUE)
 ```
 
 ## Quick start
