@@ -1,6 +1,6 @@
 Package: RateScape
-Title: Detecting Rate Heterogeneity in Discrete Character Evolution
-Version: 1.0.0
+Title: Detecting and Explaining Rate Heterogeneity in Discrete Character Evolution
+Version: 3.0.0
 Authors@R: c(
   person("Heath", "Blackmon", role = c("aut", "cre"),
          email = "h-blackmon@tamu.edu",
@@ -8,12 +8,17 @@ Authors@R: c(
   person("Claude", "Opus", role = "ctb", comment = "AI-assisted implementation")
   )
 Description: RateScape provides Bayesian and maximum likelihood methods for
-  detecting and estimating rate heterogeneity in discrete character evolution
-  across phylogenetic trees. The package allows users to specify complex
-  rate matrices (Q matrices) and infer branch-specific rate scalars, enabling
-  the visualization of rate-shifted lineages on painted phylogenies. Implements
-  spike-and-slab mixture models (Bayesian) and discretized gamma categories (ML)
-  with comprehensive prior specification tools and diagnostic functions.
+  detecting, explaining, and visualizing rate heterogeneity in discrete
+  character evolution across phylogenetic trees. The package implements a
+  spike-and-slab mixture model with reversible-jump MCMC for branch-specific
+  rate estimation, supporting phylogenetic smoothing priors, covariate-driven
+  rate models, rate-heterogeneous stochastic character mapping, and posterior
+  predictive model adequacy checks. Version 3.0 adds correlated discrete trait
+  evolution (Pagel's test with rate heterogeneity), constrained Q-matrix models
+  (ordered, Dollo, meristic, custom constraints, rate classes), RJMCMC over
+  Q-matrix structure with posterior inclusion probabilities, automatic model
+  discovery across the full model space, and Felsenstein's threshold model for
+  multistate discrete characters via data augmentation MCMC.
 License: GPL (>= 2)
 Encoding: UTF-8
 Roxygen: list(markdown = TRUE)
@@ -36,4 +41,5 @@ LinkingTo:
     Rcpp,
     RcppArmadillo
 SystemRequirements: C++17
+VignetteBuilder: knitr
 LazyData: true

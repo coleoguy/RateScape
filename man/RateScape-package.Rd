@@ -3,37 +3,119 @@
 \alias{RateScape-package}
 \alias{RateScape}
 \docType{package}
-\title{Detecting Rate Heterogeneity in Discrete Character Evolution}
+\title{RateScape: Find Where Evolution Speeds Up and Slows Down on a Phylogeny}
 \description{
-RateScape provides Bayesian and maximum likelihood methods for detecting and
-estimating rate heterogeneity in discrete character evolution across
-phylogenetic trees. The package allows users to specify rate matrices
-(Q matrices) and infer branch-specific rate scalars, enabling the
-visualization of rate-shifted lineages on painted phylogenies.
+RateScape detects which branches of a phylogenetic tree have unusually fast
+or slow rates of discrete character evolution. For example, you might want
+to know: did flower color evolve faster in tropical lineages? Did chromosome
+number change more rapidly after a whole-genome duplication? Did diet
+transitions accelerate in a particular clade?
+
+The package estimates a rate scalar for every branch in your tree. A rate
+of 1.0 means "background" (typical rate), values above 1 mean faster
+evolution on that branch, and values below 1 mean slower evolution. You can
+then visualize these rates as a color-painted phylogeny, test whether
+biological predictors (body size, habitat, etc.) explain the rate variation,
+and check whether your model actually fits the data well.
 }
 \details{
-The main functions are:
-
-\describe{
-  \item{\code{\link{fitRateScape}}}{Bayesian spike-and-slab MCMC for branch-specific rate estimation.}
-  \item{\code{\link{rateCategories}}}{Maximum likelihood discretized gamma rate categories via EM.}
-  \item{\code{\link{makeQ}}}{Construct transition rate matrices (Mk, SYM, ARD, chromosome, custom).}
-  \item{\code{\link{simRateScape}}}{Simulate discrete character data with branch rate heterogeneity.}
-  \item{\code{\link{checkPrior}}}{Prior-predictive diagnostic checking.}
-  \item{\code{\link{summarizeRates}}}{Posterior and ML summaries with Bayes factors.}
-  \item{\code{\link{plotRateTree}}}{Plot rate-painted phylogenies.}
-  \item{\code{\link{compareModels}}}{Compare multiple model fits.}
-  \item{\code{\link{compute_likelihood}}}{Felsenstein pruning likelihood under rate scalars.}
-}
-
-A typical workflow is:
+\strong{Core workflow — the four steps most users will follow:}
 
 \enumerate{
-  \item Build a rate matrix with \code{makeQ()}.
-  \item (Optional) Check prior specification with \code{checkPrior()}.
-  \item Fit the model with \code{fitRateScape()} (Bayesian) or \code{rateCategories()} (ML).
-  \item Summarize results with \code{summarizeRates()} or \code{summary()}.
-  \item Visualize with \code{plot()} or \code{plotRateTree()}.
+  \item \strong{Build a rate matrix} with \code{\link{makeQ}()}. This defines
+    your character model (e.g., equal-rates Mk for a binary trait, or an
+    all-rates-different model for multi-state characters).
+
+  \item \strong{(Optional but recommended) Check your priors} with
+    \code{\link{checkPrior}()}. This simulates data under your prior settings
+    so you can verify they produce biologically reasonable behavior before
+    committing to a long MCMC run.
+
+  \item \strong{Fit the model} using either:
+    \itemize{
+      \item \code{\link{fitRateScape}()} — Bayesian MCMC that estimates which
+        branches have shifted rates, with full uncertainty quantification.
+        This is the recommended approach for most analyses.
+      \item \code{\link{rateCategories}()} — Maximum likelihood alternative
+        that assigns branches to discrete rate categories. Faster but provides
+        less information about uncertainty.
+    }
+
+  \item \strong{Examine the results}:
+    \itemize{
+      \item \code{\link{summarizeRates}()} — Numerical summaries, Bayes factors,
+        and identification of which branches have shifted rates.
+      \item \code{\link{plotRateTree}()} or \code{plot(fit)} — Color-painted
+        phylogeny showing fast and slow branches.
+      \item \code{\link{compareModels}()} — Compare fits with different prior
+        settings or model specifications.
+    }
+}
+
+\strong{Advanced features (new in version 2.0):}
+
+\describe{
+  \item{\strong{Phylogenetic smoothing}}{The \code{smoothing} argument in
+    \code{\link{fitRateScape}()} prevents the model from concentrating high
+    rates on branches where parsimony would infer character changes. This is
+    critical when your data are sparse — without smoothing, the model can
+    overfit by placing all the rate variation on a few "change" branches. See
+    \code{\link{fitRateScape}} for details.}
+
+  \item{\strong{Covariate-driven rates}}{Test whether biological variables
+    (body size, habitat, temperature, etc.) predict which branches evolve
+    faster. Use \code{\link{tipToEdgeCovariate}()} to convert tip-level traits
+    to edge-level predictors, pass them to \code{fitRateScape(covariates=...)},
+    and summarize with \code{\link{covariateEffects}()}.}
+
+  \item{\strong{Rate-aware stochastic mapping}}{
+    \code{\link{simmapRate}()} generates stochastic character maps that
+    account for the estimated rate variation. Standard stochastic mapping
+    (e.g., in phytools) assumes the same rate on every branch, which can
+    badly misplace transitions when rates vary.}
+
+  \item{\strong{Model adequacy checking}}{
+    \code{\link{posteriorPredictive}()} simulates data from your fitted model
+    and checks whether the simulated data look like the real data. This tells
+    you whether the model is adequate or if important patterns are being
+    missed.}
+}
+
+\strong{Simulation and utility functions:}
+
+\describe{
+  \item{\code{\link{simRateScape}()}}{Simulate discrete character data with
+    known branch-specific rate variation. Useful for testing, power analysis,
+    and teaching.}
+  \item{\code{\link{compute_likelihood}()}}{Compute the likelihood of data
+    given a set of branch rate scalars. Mostly used internally but available
+    for custom analyses.}
+}
+
+\strong{Quick-start example:}
+
+\preformatted{
+library(RateScape)
+library(ape)
+
+# 1. Get your tree and data
+tree <- read.tree("my_tree.nwk")
+dat <- read.csv("my_traits.csv", row.names = 1)
+
+# 2. Build a rate matrix for a binary trait
+Q <- makeQ(model = "mk", k = 2)
+
+# 3. Check that priors are reasonable
+check <- checkPrior(tree, Q, lambda_sigma = 1.0, nsim = 200)
+plot(check)
+
+# 4. Fit the model (use more generations for real analyses!)
+fit <- fitRateScape(tree, dat, Q, lambda_sigma = 1.0,
+                    ngen = 50000, burn_in = 10000)
+
+# 5. Look at results
+summarizeRates(fit)
+plot(fit)
 }
 }
 \author{

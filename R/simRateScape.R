@@ -136,10 +136,9 @@ simRateScape <- function(
     if (is.null(r_scalars)) {
       z <- rbinom(nedges, 1, pi)  # Spike indicators
       sigma2 <- rexp(1, lambda_sigma)
-      r <- numeric(nedges)
-      for (i in 1:nedges) {
-        r[i] <- if (z[i] == 1) 1.0 else rlnorm(1, 0, sqrt(sigma2))
-      }
+      # OPTIMIZATION: Vectorized spike-and-slab sampling
+      r <- ifelse(z == 1, 1.0, rlnorm(nedges, 0, sqrt(sigma2)))
+      r[z == 1] <- 1.0  # ensure spike edges are exactly 1
     } else {
       r <- r_scalars
     }
@@ -207,16 +206,24 @@ simRateScape <- function(
 #' @keywords internal
 evolve_state <- function(current_state, scaled_Q, branch_length, k) {
 
+  # OPTIMIZATION: Pre-allocate arrays for efficiency
+  max_events <- 1000L
+  states <- integer(max_events)
+  times <- numeric(max_events)
+  states[1] <- current_state
+  n <- 0L
+  current_state <- current_state
   time_remaining <- branch_length
-  state <- current_state
 
   while (time_remaining > 0) {
 
     # Exit rate from current state
-    exit_rate <- -scaled_Q[state + 1, state + 1]
+    exit_rate <- -scaled_Q[current_state + 1, current_state + 1]
 
-    if (exit_rate <= 0) {
-      # Absorbing state; remain in this state
+    if (exit_rate <= 1e-15) {
+      # Absorbing state; record remaining time
+      n <- n + 1L
+      times[n] <- time_remaining
       break
     }
 
@@ -225,20 +232,30 @@ evolve_state <- function(current_state, scaled_Q, branch_length, k) {
 
     if (time_to_transition > time_remaining) {
       # No transition before branch end
+      n <- n + 1L
+      times[n] <- time_remaining
       break
     }
 
-    # Time has passed; now transition
+    # Record time in current state
+    n <- n + 1L
+    times[n] <- time_to_transition
     time_remaining <- time_remaining - time_to_transition
 
     # Sample next state from transition probabilities
-    transition_rates <- scaled_Q[state + 1, -( state + 1)]
+    transition_rates <- scaled_Q[current_state + 1, ]
+    transition_rates[current_state + 1] <- 0
     if (sum(transition_rates) <= 0) {
+      times[n] <- times[n] + time_remaining
       break
     }
 
-    state <- sample(setdiff(0:(k - 1), state), 1, prob = transition_rates)
+    # Sample from ALL k states using full prob vector (current state has prob 0)
+    current_state <- sample(0:(k - 1), 1, prob = transition_rates)
+    n <- n + 1L
+    states[n] <- current_state
   }
 
-  return(state)
+  # Return final state only (simplified from tracking full history)
+  return(current_state)
 }

@@ -57,6 +57,9 @@ rateCategories <- function(
   loglik_values <- numeric(length(k_values))
   models <- vector("list", length(k_values))
 
+  # Pre-build tree info once (reused across all k values and EM iterations)
+  info <- build_tree_info(tree, Q)
+
   message(sprintf("RateScape ML: Testing k = %d to %d categories", k_min, k_max))
 
   for (i in seq_along(k_values)) {
@@ -64,7 +67,7 @@ rateCategories <- function(
     message(sprintf("  Testing k = %d...", k_cat))
 
     fit_k <- fit_em_gamma(
-      tree = tree, states = states, Q = Q,
+      tree = tree, states = states, Q = Q, info = info,
       k_categories = k_cat, em_tol = em_tol,
       em_maxiter = em_maxiter, root_prior = root_prior
     )
@@ -109,9 +112,14 @@ rateCategories <- function(
 #' Fit Gamma Mixture via EM Algorithm
 #'
 #' @keywords internal
-fit_em_gamma <- function(tree, states, Q, k_categories, em_tol, em_maxiter, root_prior) {
+fit_em_gamma <- function(tree, states, Q, info = NULL, k_categories,
+                         em_tol, em_maxiter, root_prior) {
 
   nedges <- nrow(tree$edge)
+  k_states <- nrow(Q)
+
+  # Build tree info if not provided (allows caching across k values)
+  if (is.null(info)) info <- build_tree_info(tree, Q)
 
   # Initialize: gamma shape=1 gives exponential, discretize into quantiles
   alpha <- 1.0
@@ -127,11 +135,15 @@ fit_em_gamma <- function(tree, states, Q, k_categories, em_tol, em_maxiter, root
   rates <- get_rates(alpha, k_categories)
   weights <- rep(1 / k_categories, k_categories)
 
-  # Pre-compute full tree likelihood for each rate category (uniform scalars)
+  # Compute likelihood using cached tree info (avoids rebuild per call)
   compute_cat_loglik <- function(rate_val) {
     r_scalars <- rep(rate_val, nedges)
-    compute_likelihood(tree = tree, data = states, Q = Q,
-                       r_scalars = r_scalars, root_prior = root_prior)
+    L <- postorder_pass(info, states, Q, r_scalars)
+    root_L <- L[info$root, ]
+    rw <- get_root_weights(root_L, root_prior, Q, k_states, info$stat_dist)
+    total_lik <- sum(root_L * rw)
+    if (total_lik <= 0) return(-1e20)
+    log(total_lik)
   }
 
   loglik_old <- -Inf

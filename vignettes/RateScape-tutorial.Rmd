@@ -1,0 +1,946 @@
+---
+title: "RateScape: A Complete Guide to Modeling Rate Heterogeneity in Discrete Character Evolution"
+author: "Heath Blackmon"
+date: "`r Sys.Date()`"
+output:
+  rmarkdown::html_vignette:
+    toc: true
+    toc_depth: 3
+vignette: >
+  %\VignetteIndexEntry{RateScape: A Complete Guide to Modeling Rate Heterogeneity in Discrete Character Evolution}
+  %\VignetteEngine{knitr::rmarkdown}
+  %\VignetteEncoding{UTF-8}
+---
+
+```{r setup, include = FALSE}
+knitr::opts_chunk$set(
+  collapse = TRUE,
+  comment = "#>",
+  fig.width = 7,
+  fig.height = 5,
+  warning = FALSE,
+  message = FALSE
+)
+```
+
+
+# Part I: Background and Motivation
+
+## Why do we care about evolutionary rates?
+
+Imagine you are looking at a phylogeny of beetles---hundreds of thousands of species spread across a tree that spans 300 million years. Some lineages have stayed remarkably conservative: they still look, behave, and function like their ancient ancestors. Other lineages have changed dramatically in a short span of evolutionary time. The *rate* at which traits change is not the same everywhere on the tree.
+
+This observation is not unique to beetles. In virtually every group of organisms, some lineages are evolutionary speedsters and others are evolutionary slowpokes. Understanding *where* and *why* rates change is one of the central questions in evolutionary biology. If we can identify which branches in a phylogeny experienced accelerated evolution, we can start asking: Was there an ecological opportunity? A key innovation? A change in population size?
+
+Standard phylogenetic comparative methods for discrete characters (like the Mk model) assume the same rate of evolution on every branch of the tree. This is a useful simplification, but it can lead us astray. If rates actually vary and we ignore that variation, we can get wrong answers about ancestral states, biased estimates of transition rates, and misleading tests of correlated evolution.
+
+**RateScape** addresses this problem head-on. It lets you estimate how fast discrete traits are evolving on every branch of the tree, identify which branches deviate from the background rate, and ask whether external variables (like body size or habitat) explain the rate variation.
+
+
+## What is a discrete character?
+
+Before diving into rates, let's make sure we are on the same page about what we are modeling. A *discrete character* is a trait that takes one of a finite set of states. Examples include:
+
+- **Sex determination system**: XY, ZW, haplo-diploid, environmental
+- **Habitat**: aquatic, terrestrial, arboreal
+- **Diet**: herbivore, omnivore, carnivore
+- **Chromosome number class**: low, medium, high
+- **Presence/absence** of a structure: wings present, wings absent
+
+Unlike continuous traits (body mass, temperature tolerance), discrete characters jump between states. You don't smoothly transition from "herbivore" to "carnivore"---at some point in evolutionary time, the lineage switches.
+
+
+## The Markov model: how we think about discrete trait evolution
+
+The standard mathematical framework for modeling discrete character evolution on a phylogeny is a **continuous-time Markov chain** (CTMC). Don't let that name intimidate you. Here is the intuition:
+
+Think of an organism sitting in one of $k$ possible states (say, three diet types). At any moment, there is some probability of switching to a different state. The longer you wait, the more likely a switch becomes. The Markov property just means that the probability of switching depends only on the *current* state, not on the history of how you got there.
+
+The entire model is captured by a single object: the **transition rate matrix**, which we call **Q**. For $k$ states, Q is a $k \times k$ matrix where:
+
+- The off-diagonal entry $q_{ij}$ is the *instantaneous rate* of switching from state $i$ to state $j$. Larger values mean the switch happens more readily.
+- The diagonal entry $q_{ii}$ is set so each row sums to zero: $q_{ii} = -\sum_{j \neq i} q_{ij}$. This is a bookkeeping trick that makes the math work.
+
+For example, a Q matrix for three states (0, 1, 2) under a symmetric model might look like:
+
+$$
+Q = \begin{pmatrix} -2q & q & q \\ q & -2q & q \\ q & q & -2q \end{pmatrix}
+$$
+
+Here all transition rates are equal to some value $q$. This is the simplest possible model (the **Mk** model, for "Markov with $k$ states"). More complex models allow different rates for different transitions.
+
+
+## From Q to probabilities: what happens on a branch
+
+Given Q, we can compute the probability that a lineage in state $i$ at the start of a branch ends up in state $j$ at the end of the branch. If the branch has length $t$ (measured in expected substitutions per site, or simply in units of time), the transition probability matrix is:
+
+$$P(t) = e^{Qt}$$
+
+This is a **matrix exponential**. For our purposes, the key takeaway is:
+
+- Short branches: $P(t)$ is close to the identity matrix (you probably stay in whatever state you started in).
+- Long branches: $P(t)$ approaches the *stationary distribution* (you could end up in any state, with probabilities determined by Q).
+
+This is the mathematical machinery that lets us compute the probability of the data we observe at the tips of a phylogeny, given a model of evolution.
+
+
+## The standard assumption: one Q for the whole tree
+
+In the classical Mk model and its extensions (SYM, ARD), we assume that the *same* Q matrix applies to every branch. In other words, the rules of the game---how readily states switch---are constant across the entire tree and across all of evolutionary time.
+
+This assumption works well in many cases, but consider:
+
+- A lineage colonizes islands. Suddenly freed from continental competitors, diet evolution accelerates.
+- A whole-genome duplication event relaxes selective constraints on chromosome number evolution.
+- A clade evolves a key innovation that opens up new ecological niches, speeding up habitat transitions.
+
+In all these cases, the *rules* (which transitions are possible) might stay the same, but the *pace* changes. Some branches evolve faster than others.
+
+
+## What RateScape does differently: branch-specific rate scalars
+
+RateScape keeps the standard Q matrix framework but adds a twist. Instead of applying $Q$ uniformly, each branch $j$ in the tree gets its own **rate scalar** $r_j$ that multiplies Q:
+
+$$P_j(t_j) = e^{r_j \cdot Q \cdot t_j}$$
+
+If $r_j = 1$, the branch evolves at the "normal" pace. If $r_j = 3$, evolution on that branch is three times faster. If $r_j = 0.2$, it is five times slower.
+
+This is a simple but powerful extension. We are not changing *which* transitions are possible or their relative rates---we are just turning up or down the overall speed dial for each branch.
+
+The challenge is estimation. A tree with $n$ tips has $2n - 2$ branches, so we potentially have $2n - 2$ rate scalars to estimate from $n$ observations (the tip states). This is a severely underdetermined problem. RateScape handles it with a **Bayesian approach** using informative priors, which we will explain next.
+
+
+# Part II: The RateScape Model
+
+## The spike-and-slab prior
+
+The key statistical innovation in RateScape is the **spike-and-slab prior** on the rate scalars. This prior expresses a specific biological belief: *most branches evolve at the background rate, but some branches are different*.
+
+For each branch $j$, we introduce a binary indicator variable $z_j$:
+
+- $z_j = 0$: this branch evolves at the background rate ($r_j = 1$)
+- $z_j = 1$: this branch has a shifted rate ($r_j \neq 1$)
+
+The proportion of background-rate branches is controlled by a parameter $\pi$ (the spike probability). When $z_j = 1$, the rate scalar is drawn from a log-normal distribution:
+
+$$r_j | z_j = 1 \sim \text{LogNormal}(0, \sigma^2)$$
+
+The log-normal distribution is convenient because:
+
+1. It only produces positive values (rates cannot be negative).
+2. It is centered at 1 (on the log scale, the mean is 0), meaning shifts are *a priori* equally likely to be increases or decreases.
+3. The spread parameter $\sigma^2$ controls how extreme the shifts can be.
+
+In RateScape, $\sigma^2$ is controlled by the user-specified `lambda_sigma` parameter. Larger values allow more extreme rate variation. Smaller values keep the rate scalars close to 1.
+
+To summarize the full generative model:
+
+1. **Tree and Q**: Given (or estimated from the data).
+2. **For each branch $j$**:
+   - Draw $z_j \sim \text{Bernoulli}(\pi)$
+   - If $z_j = 0$: set $r_j = 1$
+   - If $z_j = 1$: draw $r_j \sim \text{LogNormal}(0, \sigma^2)$
+3. **Simulate** the discrete character along the tree using $P_j(t_j) = e^{r_j Q t_j}$ for each branch.
+
+
+## Fitting the model: MCMC
+
+We observe the character states only at the tips of the tree. The internal node states, the rate scalars $r_j$, and the indicators $z_j$ are all unobserved. We use **Markov chain Monte Carlo** (MCMC) to explore the space of possible values for all these unknowns, weighted by how well they explain the observed data.
+
+In plain language: the MCMC algorithm proposes changes (e.g., "what if branch 47 had rate 2.5 instead of 1.0?"), evaluates whether the data look more or less probable under that change, and keeps the change with a probability proportional to the improvement. After many thousands of proposals, the collection of accepted values gives us the **posterior distribution**---our best guess at the rate scalars given the data and our prior beliefs.
+
+RateScape uses several MCMC moves:
+
+- **Rate scalar proposals**: For each branch, propose a new $r_j$ from a sliding window on the log scale.
+- **Indicator proposals**: Propose flipping $z_j$ between 0 and 1 (moving a branch between "background" and "shifted").
+- **Hyperparameter updates**: Update $\pi$ and $\sigma^2$ based on the current configuration.
+
+The likelihood computation---the step that evaluates how probable the tip data are given the current rates---uses Felsenstein's pruning algorithm, computed in postorder from tips to root. RateScape optimizes this with a **partial likelihood update**: when proposing a rate change on a single branch, only the likelihood contributions affected by that branch are recomputed, rather than the entire tree.
+
+
+## Phylogenetic smoothing (optional)
+
+In some biological systems, you expect neighboring branches to have similar rates. For example, if a clade enters a new adaptive zone, several closely related branches might all evolve faster. The **phylogenetic smoothing prior** encodes this expectation by penalizing large differences between the rate of a branch and the rates of its neighbors.
+
+Formally, this adds a penalty term:
+
+$$\log p(r_j | r_{\text{parent}}) \propto -\frac{(\log r_j - \log r_{\text{parent}})^2}{2 \tau^2}$$
+
+where $\tau^2$ controls the smoothness. Smaller $\tau^2$ forces neighboring rates to be more similar. This is similar to the concept of phylogenetic signal for continuous traits.
+
+
+# Part III: Building Q Matrices with `makeQ`
+
+## Choosing a model of state transitions
+
+Before fitting rate heterogeneity, you need to specify the transition rate matrix Q. RateScape provides several built-in models. Choosing among them requires thinking about the biology of your character.
+
+### Equal-rates model (Mk)
+
+The simplest model: all transitions happen at the same rate. For $k$ states, there is only **one free parameter**.
+
+```{r mk, eval = FALSE}
+Q_mk <- makeQ(k = 3, model = "mk")
+```
+
+This is analogous to the Jukes-Cantor model in molecular evolution. Use it as a starting point, or when you have no reason to think any transition is more common than another.
+
+### Symmetric model (SYM)
+
+The rate of going from state $i$ to state $j$ equals the rate of going from $j$ to $i$ ($q_{ij} = q_{ji}$), but different pairs can have different rates. For $k$ states, there are $k(k-1)/2$ free parameters.
+
+```{r sym, eval = FALSE}
+Q_sym <- makeQ(k = 3, model = "sym")
+# 3 free parameters: q01=q10, q02=q20, q12=q21
+```
+
+Use SYM when you think gaining and losing a trait are equally easy, but transitions between different pairs of states may differ.
+
+### All-rates-different model (ARD)
+
+Every off-diagonal entry in Q is a separate free parameter. For $k$ states, there are $k(k-1)$ parameters.
+
+```{r ard, eval = FALSE}
+Q_ard <- makeQ(k = 3, model = "ard")
+# 6 free parameters: q01, q02, q10, q12, q20, q21
+```
+
+Use ARD when you think the direction of a transition matters---for example, gaining wings might be harder than losing them.
+
+### Ordered model
+
+Transitions only occur between adjacent states: $0 \leftrightarrow 1 \leftrightarrow 2 \leftrightarrow 3$. You cannot jump from state 0 directly to state 3. This is appropriate for characters like chromosome number where changes happen in increments.
+
+```{r ordered, eval = FALSE}
+Q_ord <- makeQ(k = 4, model = "ordered")
+```
+
+### Dollo / irreversible model
+
+Once you leave state 0, you can never return. This implements Dollo's law---complex structures, once lost, cannot be re-evolved. Biologically this is often too strict, but it is a useful hypothesis to test.
+
+```{r dollo, eval = FALSE}
+Q_dollo <- makeQ(k = 3, model = "dollo")
+```
+
+### Meristic model
+
+Like ordered, but with explicit gain and loss rates. Useful for characters where you gain or lose one unit at a time (e.g., digit number: 5 → 4 → 3 but not 5 → 3).
+
+```{r meristic, eval = FALSE}
+Q_mer <- makeQ(k = 5, model = "meristic")
+```
+
+### Custom constraints
+
+You can also create custom Q matrices by specifying which transitions are forbidden or which rates are tied together:
+
+```{r custom, eval = FALSE}
+# Forbid direct transitions between states 0 and 2
+Q_custom <- makeQ(k = 3, model = "ard",
+                  constraints = list(zeros = list(c(1, 3), c(3, 1))))
+```
+
+
+# Part IV: Practical Workflow
+
+## Step 1: Simulate data to build intuition
+
+Before analyzing real data, it is enormously helpful to work with simulated data where you *know* the truth. This lets you verify that the method recovers the correct signal and helps you develop intuition for what different parameter values look like.
+
+```{r simulate_full, eval = FALSE}
+library(RateScape)
+library(ape)
+
+# Generate a 100-tip tree
+set.seed(42)
+tree <- rcoal(100)
+
+# Build a 3-state symmetric Q matrix
+Q <- makeQ(k = 3, model = "sym")
+
+# Simulate with rate heterogeneity:
+#   pi = 0.4 means 40% of branches evolve at background rate
+#   lambda_sigma = 2.0 controls the spread of shifted rates
+#   nrep = 3 gives us three independent replicates
+sim <- simRateScape(tree, Q,
+                    lambda_sigma = 2.0,
+                    pi = 0.4,
+                    nrep = 3,
+                    return_rates = TRUE,
+                    seed = 42)
+
+# What did we get?
+# sim$data: list of 3 data frames (one per replicate), each with 100 rows
+head(sim$data[[1]])
+
+# sim$rates: matrix with 198 rows (one per edge) and 3 columns (one per replicate)
+# These are the TRUE rate scalars we'll try to recover
+summary(sim$rates[, 1])
+```
+
+Key things to notice about the simulated rates:
+
+- Most values will be near 1.0 (the spike: branches at background rate).
+- Some values will be much larger (2, 5, 10) or smaller (0.2, 0.5) than 1 (the slab: shifted branches).
+- The distribution is right-skewed because rates are log-normally distributed.
+
+
+## Step 2: Fit a standard (homogeneous) model first
+
+It is good scientific practice to start simple. Fit a standard discrete trait model that assumes no rate heterogeneity. This gives you a baseline for comparison.
+
+```{r fitQ_example, eval = FALSE}
+# Maximum likelihood fit with the SYM model
+ml_fit <- fitQ(tree, sim$data[[1]],
+               model = "sym",
+               method = "ml",
+               root_prior = "fitzjohn")
+
+# What did we learn?
+ml_fit$loglik   # log-likelihood
+ml_fit$AIC      # Akaike Information Criterion (lower is better)
+ml_fit$Q_mle    # the estimated Q matrix
+```
+
+### Understanding root priors
+
+The `root_prior` argument specifies what we assume about the ancestral state at the root of the tree. This matters because the root is the starting point for the entire evolutionary process on the tree:
+
+- **`"fitzjohn"`** (recommended default): Uses the FitzJohn method, which weights root states by the conditional likelihood. This is data-driven and generally performs well.
+- **`"equal"`**: All root states are equally probable. Use when you have no prior information.
+- **`"stationary"`**: Root state probabilities are the stationary (equilibrium) distribution of Q. Use when you believe the character has been evolving for a long time before the root.
+
+
+## Step 3: Fit the spike-and-slab model
+
+Now fit the full RateScape model with branch-specific rate estimation:
+
+```{r fitRateScape_example, eval = FALSE}
+fit <- fitRateScape(
+  tree         = tree,
+  data         = sim$data[[1]],
+  Q            = Q,               # supply known Q, or set estimate_Q = TRUE
+  estimate_Q   = FALSE,
+  lambda_sigma = 2.0,             # should roughly match simulation
+  root_prior   = "fitzjohn",
+  ngen         = 50000,           # total MCMC iterations
+  burn_in      = 10000,           # discard early iterations
+  thin         = 20,              # keep every 20th sample
+  seed         = 42
+)
+```
+
+### Choosing `lambda_sigma`
+
+This is the most important tuning parameter. It controls the prior variance of the slab distribution (how extreme rate shifts are allowed to be). Think of it as a dial:
+
+- **`lambda_sigma = 0.5`**: Very conservative. The model expects rate scalars close to 1. Only very strong signal will produce shifted branches.
+- **`lambda_sigma = 1.0–1.5`**: Moderate. A sensible default for most datasets.
+- **`lambda_sigma = 2.0–3.0`**: Liberal. Allows large rate shifts. Use when you have good reason to expect dramatic rate variation (e.g., rapid adaptive radiation).
+- **`lambda_sigma > 3.0`**: Very liberal. Rates can span orders of magnitude. Be cautious---with too diffuse a prior, the model may overfit noise.
+
+You can visualize the prior implied by your choice:
+
+```{r checkprior, eval = FALSE}
+# Visualize the spike-and-slab prior
+checkPrior(lambda_sigma = 2.0, expected_background = 0.5)
+```
+
+This plots the prior density of rate scalars, showing both the spike at 1 and the spread of the slab. If the slab looks much wider than you expect biologically, reduce `lambda_sigma`.
+
+**Practical advice**: If you are unsure, fit the model with a few different `lambda_sigma` values (e.g., 1.0, 2.0, 3.0) and check whether the conclusions change qualitatively. If they are robust to the choice, you can be more confident in the results.
+
+
+### Choosing MCMC parameters
+
+Three parameters control the MCMC:
+
+- **`ngen`** (total iterations): More is better. For exploratory analysis, 10,000–50,000 is fine. For publication, use 100,000 or more.
+- **`burn_in`** (iterations to discard): The MCMC needs time to find the region of high probability. Discard the first 10–20% of iterations.
+- **`thin`** (thinning interval): Successive MCMC samples are correlated. Keeping every 10th or 20th sample reduces storage and autocorrelation.
+
+The effective sample size (ESS) of the posterior is what matters. After fitting, check that your chains have explored well:
+
+```{r diagnostics, eval = FALSE}
+# Trace plot: does the chain look like it's mixing (hairy caterpillar)?
+plot(fit$mcmc_samples$loglik, type = "l",
+     xlab = "Sample", ylab = "Log-likelihood",
+     main = "MCMC trace plot")
+
+# If the trace plot shows a trend (going up or down), increase burn_in.
+# If it shows long flat stretches, the chain is stuck---increase ngen.
+# If it looks like white noise around a stable mean, you're in good shape.
+```
+
+
+## Step 4: Interpret the results
+
+### Summarizing rate estimates
+
+```{r summarize, eval = FALSE}
+rates <- summarizeRates(fit)
+head(rates)
+```
+
+This returns a data frame with one row per branch, containing:
+
+- **`mean_r`**: Posterior mean of the rate scalar. Values > 1 indicate faster evolution; < 1 indicates slower.
+- **`median_r`**: Posterior median (more robust to outliers than the mean).
+- **`lower_95` / `upper_95`**: 95% credible interval. If this interval excludes 1, there is strong evidence the branch deviates from the background rate.
+- **`prob_shifted`**: The posterior probability that $z_j = 1$ (the branch is in the slab, not the spike). This is the key measure of evidence.
+
+**How to interpret `prob_shifted`**:
+
+- `prob_shifted > 0.90`: Strong evidence this branch has a shifted rate.
+- `prob_shifted = 0.50–0.90`: Moderate evidence; the data are somewhat informative but not conclusive.
+- `prob_shifted < 0.50`: Little evidence of a rate shift; the branch is consistent with the background rate.
+
+### Visualizing rate variation on the tree
+
+```{r plot_tree, eval = FALSE}
+# Color branches by posterior mean rate
+plotRateTree(fit, quantile_threshold = 0.75)
+
+# Label only branches with strong evidence of a shift
+plotRateTree(fit, quantile_threshold = 0.90, label_shifted = TRUE)
+```
+
+The `quantile_threshold` controls which branches are highlighted. Setting it to 0.90 means only branches where `prob_shifted > 0.90` are colored differently.
+
+### Comparing to the truth (with simulated data)
+
+Since we simulated the data, we can check how well RateScape recovers the true rates:
+
+```{r compare_truth, eval = FALSE}
+true_rates <- sim$rates[, 1]
+estimated_rates <- rates$mean_r
+
+# Correlation between true and estimated rates
+cor(true_rates, estimated_rates)
+
+# Plot true vs estimated
+plot(true_rates, estimated_rates,
+     xlab = "True rate scalar", ylab = "Estimated rate scalar",
+     main = "Recovery of rate scalars",
+     pch = 16, col = rgb(0, 0, 0, 0.3))
+abline(0, 1, col = "red", lwd = 2)
+```
+
+Don't expect perfect recovery. Discrete characters carry less information than continuous characters (only $k$ possible states), so rate estimation is inherently noisy. The posterior credible intervals will be wide for many branches. What matters is:
+
+1. Branches with genuinely high rates tend to have high posterior means.
+2. Branches with `prob_shifted > 0.90` mostly correspond to truly shifted branches.
+3. The overall pattern of rate variation is captured, even if individual branch estimates are noisy.
+
+
+## Step 5: Check model adequacy
+
+Fitting a model and getting an answer is not enough. We need to check whether the model provides a good description of the data. **Posterior predictive checks** do this by simulating data from the fitted model and comparing summary statistics between simulated and observed data.
+
+```{r ppc, eval = FALSE}
+ppc <- posteriorPredictive(
+  fit,
+  observed_data = sim$data[[1]],
+  nsim = 500,
+  test_statistics = c("transitions", "entropy", "consistency",
+                      "rate_dispersion", "max_clade_freq"),
+  seed = 42
+)
+```
+
+The function computes several test statistics:
+
+- **transitions**: The number of parsimony-inferred state changes. If the model predicts too few or too many changes, the rate model may be misspecified.
+- **entropy**: Shannon entropy of the tip state frequencies. This captures whether the model produces the right balance of states.
+- **consistency**: How consistent states are within clades. High values mean closely related species tend to share states.
+- **rate_dispersion**: Variation in the rate of change across branches. This directly tests whether the rate heterogeneity model is adequate.
+- **max_clade_freq**: The maximum frequency of any single state within a clade. This detects if certain clades are too uniform or too variable.
+
+```{r ppc_interpret, eval = FALSE}
+ppc$p_values
+```
+
+A **posterior predictive p-value** close to 0.5 means the model matches the data well for that statistic. Values near 0 or 1 indicate systematic mismatch:
+
+- **p ≈ 0**: The observed statistic is smaller than almost all simulated values. The model is generating values that are too large.
+- **p ≈ 1**: The observed statistic is larger than almost all simulated values. The model is generating values that are too small.
+- **p ∈ (0.05, 0.95)**: No evidence of inadequacy.
+
+
+## Step 6: Stochastic character mapping
+
+Stochastic character maps (SIMAPs) are detailed histories of character change along branches. Unlike ancestral state reconstruction (which only estimates states at nodes), stochastic maps give you the full trajectory: where changes happened, how many times, and the dwelling time in each state.
+
+Standard stochastic mapping assumes a uniform rate across the tree. This can produce misleading maps when rates vary: slow branches will have too many inferred changes and fast branches too few. RateScape's `simmapRate` produces maps that account for the estimated rate heterogeneity:
+
+```{r simmap, eval = FALSE}
+maps <- simmapRate(
+  fit,
+  nsim = 100,          # number of stochastic maps
+  rate_summary = "sample",  # "mean", "sample", or "map"
+  seed = 42
+)
+```
+
+The `rate_summary` argument controls how rate scalars are used:
+
+- **`"sample"`**: For each map, draw a random posterior sample of the rate vector. This propagates uncertainty in rate estimation into the maps.
+- **`"mean"`**: Use the posterior mean rate for each branch. Faster, but ignores rate uncertainty.
+- **`"map"`**: Use the maximum a posteriori (MAP) rate for each branch.
+
+The result is a `multiSimmap` object compatible with phytools:
+
+```{r simmap_use, eval = FALSE}
+library(phytools)
+
+# Summary across maps
+summary(maps)
+
+# Plot a single map
+plotSimmap(maps[[1]])
+
+# Count transitions per branch across maps
+# (useful for identifying branches with frequent state changes)
+```
+
+
+# Part V: Advanced Models
+
+## Correlated evolution with `fitCorrelated`
+
+One of the classic questions in comparative biology is whether two traits evolve together. For example: Is the evolution of bright coloration correlated with the evolution of toxicity? Do diet and habitat evolve in concert?
+
+Pagel (1994) introduced a test for correlated evolution of two binary characters. The idea is to compare two models:
+
+1. **Independent model**: Each character evolves on its own, unaffected by the state of the other character. The compound Q matrix is the Kronecker sum of the two individual Q matrices.
+2. **Dependent model**: The rate of change in one character depends on the current state of the other. The compound Q matrix has more free parameters that capture these dependencies.
+
+If the dependent model fits significantly better than the independent model, we have evidence for correlated evolution.
+
+RateScape extends Pagel's test by allowing rate heterogeneity. This matters because if some branches evolve faster for *both* traits (e.g., during an adaptive radiation), the standard test might find spurious correlation---the traits appear correlated simply because they both change on the same fast-evolving branches.
+
+```{r correlated_full, eval = FALSE}
+# Data: two binary characters, rows named to match tree tips
+cor_data <- data.frame(
+  char1 = sample(0:1, length(tree$tip.label), replace = TRUE),
+  char2 = sample(0:1, length(tree$tip.label), replace = TRUE),
+  row.names = tree$tip.label
+)
+
+# ML test (quick)
+cor_ml <- fitCorrelated(tree, cor_data, method = "ml",
+                        root_prior = "fitzjohn")
+
+# Likelihood ratio test
+lr_stat <- 2 * (cor_ml$dependent$loglik - cor_ml$independent$loglik)
+df <- cor_ml$dependent$n_params - cor_ml$independent$n_params
+p_value <- pchisq(lr_stat, df = df, lower.tail = FALSE)
+cat("LR statistic:", lr_stat, "\n")
+cat("p-value:", p_value, "\n")
+
+# Bayesian version (accounts for rate heterogeneity)
+cor_bayes <- fitCorrelated(tree, cor_data, method = "bayesian",
+                           lambda_sigma = 1.0,
+                           ngen = 50000, burn_in = 10000, thin = 20,
+                           seed = 42)
+```
+
+
+## Discovering Q-matrix structure with `fitQstructure`
+
+When you have more than two states, the Q matrix can have many parameters (ARD with $k$ states has $k(k-1)$ parameters). But do you really need all of them? Maybe some transitions never happen, or some rates are equal.
+
+`fitQstructure` uses **reversible-jump MCMC** (RJMCMC) to explore the space of possible Q-matrix structures. It starts from a base model (usually ARD) and proposes moves that add or remove individual transitions, or merge transitions that have similar rates. After the MCMC has run, you get **posterior inclusion probabilities** (PIPs) for each transition---the probability that a given transition belongs in the model.
+
+```{r qstructure, eval = FALSE}
+qs_fit <- fitQstructure(
+  tree, sim$data[[1]],
+  base_model = "ard",
+  allow_zero_rate = TRUE,     # can transitions be dropped entirely?
+  rate_heterogeneity = TRUE,  # simultaneously model branch rate variation?
+  lambda_sigma = 1.5,
+  lambda_q = 1.0,            # prior on Q-matrix sparsity (higher = sparser)
+  ngen = 100000,
+  burn_in = 20000,
+  thin = 50,
+  seed = 42
+)
+
+# Examine posterior inclusion probabilities
+print(qs_fit)
+```
+
+**Interpreting PIPs:**
+
+- **PIP > 0.95**: This transition is almost certainly needed. Include it in your model.
+- **PIP = 0.50–0.95**: Uncertain. The data provide some support, but the transition may or may not be important.
+- **PIP < 0.05**: This transition is not supported. You can safely drop it.
+
+This is a principled alternative to the common practice of fitting ARD and then subjectively deciding which near-zero rates to drop.
+
+
+## Threshold model with `fitThreshold`
+
+Some discrete characters may be better understood as the visible manifestation of an underlying continuous process. For example, whether a flower is "large" or "small" might reflect a continuous size distribution where we impose an arbitrary cutoff.
+
+**Felsenstein's threshold model** formalizes this. It assumes:
+
+1. An unobserved continuous "liability" evolves by Brownian motion along the tree.
+2. Thresholds partition the continuous scale into discrete bins.
+3. The observed state of a tip is determined by which bin its liability falls into.
+
+This can be a more biologically realistic model because it naturally handles ordered characters and produces smoother evolutionary dynamics than the Markov chain model.
+
+RateScape implements the threshold model via **data augmentation MCMC**: the algorithm alternately samples the latent liabilities (given the thresholds and tree) and the thresholds and evolutionary rate (given the liabilities).
+
+```{r threshold, eval = FALSE}
+thresh_fit <- fitThreshold(
+  tree, sim$data[[1]],
+  k = 3,                     # number of observed discrete states
+  ngen = 100000,
+  burn_in = 20000,
+  thin = 50,
+  sigma2_prior = "diffuse",  # prior on BM rate
+  root_prior = "diffuse",    # prior on root liability
+  seed = 42
+)
+
+print(thresh_fit)
+# Outputs:
+#   - sigma2: posterior of the BM rate (how fast the liability evolves)
+#   - thresholds: posterior of the threshold positions
+#   - ancestral liabilities at internal nodes
+```
+
+
+## Automatic model discovery with `autoModel`
+
+If you want a systematic comparison across many models, `autoModel` handles the bookkeeping. It fits all combinations of:
+
+- **Q model**: mk, sym, ard, ordered, dollo, meristic, custom
+- **Rate model**: none (homogeneous), gamma (discretized rate categories)
+- **Root prior**: fitzjohn, equal, stationary
+
+It ranks models by information criterion (AIC, AICc, or BIC).
+
+```{r automodel, eval = FALSE}
+auto <- autoModel(
+  tree, sim$data[[1]],
+  models      = c("mk", "sym", "ard", "ordered"),
+  rate_models = c("none", "gamma"),
+  root_priors = c("fitzjohn", "equal"),
+  criterion   = "aicc",       # AICc accounts for sample size
+  k_gamma_max = 6,            # max number of gamma rate categories
+  parallel    = TRUE,         # fit ML models in parallel
+  n_cores     = 4,
+  seed        = 42
+)
+
+# View ranked results
+print(auto)
+```
+
+The output table shows, for each model combination: log-likelihood, number of parameters, and the chosen information criterion. The best model is the one with the lowest criterion value.
+
+**Note**: `autoModel` uses ML for standard discrete models and EM for gamma rate categories. It does not automatically run the full Bayesian spike-and-slab model (use `fitRateScape` for that). It is best thought of as a tool for selecting the Q-matrix model and deciding whether simple (gamma) rate heterogeneity is needed, before committing to the more computationally intensive Bayesian analysis.
+
+
+## Discretized gamma rate heterogeneity with `rateCategories`
+
+If you want a simpler (ML-based) approach to rate heterogeneity, `rateCategories` fits a discretized gamma distribution to model among-branch rate variation. This is the same idea as the gamma rate model used for site variation in molecular phylogenetics, but applied to branches instead of sites.
+
+The model assumes that each branch's rate scalar is drawn from one of $k$ discrete rate categories, whose values and weights are determined by a gamma distribution (parameterized by a single shape parameter $\alpha$). The EM algorithm estimates the optimal category assignments and the shape parameter simultaneously.
+
+```{r rate_categories, eval = FALSE}
+rc <- rateCategories(
+  tree, sim$data[[1]], Q = Q,
+  k_min = 2,      # minimum number of rate categories to test
+  k_max = 8,      # maximum number of rate categories
+  root_prior = "fitzjohn",
+  seed = 42
+)
+
+# BIC selects the best number of categories
+rc$best_k
+rc$best_loglik
+
+# Examine the rate categories for the best-fitting k
+rc$results[[rc$best_k]]$weights   # mixing proportions
+rc$results[[rc$best_k]]$rates     # rate values for each category
+```
+
+This approach is faster than MCMC but less flexible: it assumes rates are drawn from a parametric distribution and does not identify *which* specific branches have shifted rates.
+
+
+## Covariate-driven rate models
+
+Sometimes you have a hypothesis about *why* rates vary. Maybe lineages with larger body size evolve diet faster because they can access a wider range of food sources. Or maybe lineages at higher latitudes have slower rates of habitat evolution because there are fewer habitat types.
+
+RateScape lets you include continuous covariates in the rate model:
+
+$$\log(r_j) = \beta_0 + \beta_1 x_{j,1} + \beta_2 x_{j,2} + \ldots + \epsilon_j$$
+
+where $x_{j,p}$ are edge-level covariate values and $\beta_p$ are regression coefficients estimated during MCMC.
+
+Since covariates are typically measured at tips (e.g., body size), you first need to convert them to edge-level values using `tipToEdgeCovariate`:
+
+```{r covariates_full, eval = FALSE}
+# Suppose you have body size for each tip
+body_size <- rnorm(length(tree$tip.label), mean = 10, sd = 3)
+names(body_size) <- tree$tip.label
+
+# Convert to edge-level values (average of parent and child tip values)
+edge_cov <- tipToEdgeCovariate(tree, body_size, method = "mean")
+
+# Fit with covariates
+fit_cov <- fitRateScape(
+  tree, sim$data[[1]], Q = Q,
+  lambda_sigma = 2.0,
+  covariates = edge_cov,
+  ngen = 50000, burn_in = 10000, thin = 20,
+  seed = 42
+)
+
+# Examine covariate effects
+cov_results <- covariateEffects(fit_cov, burnin_frac = 0, prob = 0.95)
+cov_results
+```
+
+The output reports the posterior distribution of each $\beta$ coefficient. If the 95% credible interval for $\beta_1$ excludes zero, then body size is a significant predictor of evolutionary rate.
+
+
+# Part VI: Practical Advice and Common Pitfalls
+
+## How much data do you need?
+
+The fundamental challenge of branch-specific rate estimation is that you have more parameters ($2n - 2$ rate scalars) than observations ($n$ tip states). The spike-and-slab prior helps by regularizing the estimates, but the data still need to be informative enough to overcome the prior.
+
+Rules of thumb:
+
+- **Fewer than 50 tips**: You can estimate the overall level of rate heterogeneity (e.g., "rates are variable" vs. "rates are constant"), but individual branch estimates will be very uncertain.
+- **50–200 tips**: Good for identifying the most dramatically shifted branches.
+- **200+ tips**: Individual branch estimates become meaningful, and the spatial pattern of rate variation is recoverable.
+- **More states help**: A 4-state character carries more information per tip than a binary character. With binary data, you may need larger trees.
+
+## Sensitivity analysis
+
+For any Bayesian analysis, it is good practice to vary the prior and check whether the posterior changes qualitatively:
+
+1. **Vary `lambda_sigma`**: Fit with values of 1.0, 2.0, and 3.0. If the same branches are flagged as shifted across all values, the result is robust.
+2. **Vary the Q model**: Does it matter whether you use SYM vs. ARD? If the rate pattern is robust to Q specification, that is reassuring.
+3. **Vary `root_prior`**: FitzJohn vs. equal vs. stationary. Root prior effects should diminish with larger trees.
+4. **Check MCMC convergence**: Run the analysis multiple times with different seeds. The posterior summaries should be similar.
+
+## When to use which function
+
+| Question | Function |
+|----------|----------|
+| What are the transition rates (no rate heterogeneity)? | `fitQ` |
+| Are rates variable across the tree? | `fitRateScape` |
+| Which branches have shifted rates? | `fitRateScape` + `summarizeRates` |
+| Does a covariate explain rate variation? | `fitRateScape` with `covariates` |
+| Are two binary characters correlated? | `fitCorrelated` |
+| Which transitions belong in the Q matrix? | `fitQstructure` |
+| Is the threshold model appropriate? | `fitThreshold` |
+| What is the best Q model and rate model? | `autoModel` |
+| How many rate categories do I need (ML)? | `rateCategories` |
+| Does my model fit the data? | `posteriorPredictive` |
+| What does the history look like? | `simmapRate` |
+| What does the prior look like? | `checkPrior` |
+
+
+## Performance and scaling
+
+RateScape is designed to handle large phylogenies efficiently. Under the hood, several optimizations make this possible:
+
+- **Tree structure is cached**: The postorder traversal order, children lists, and ancestor maps are computed once and reused across all MCMC iterations. This avoids the common pitfall of rebuilding these structures every time the likelihood is evaluated.
+- **Partial likelihood updates**: When proposing a rate change on a single branch, only the likelihood contributions along the path from that branch to the root are recomputed. This reduces per-iteration cost from $O(n)$ to $O(\text{depth})$.
+- **Eigen decomposition caching**: The Q matrix's eigendecomposition (needed for matrix exponentiation) is computed once and reused. It is only recomputed when Q itself changes.
+- **Compiled C++ core**: The inner loops for matrix exponentiation and the pruning algorithm are written in C++ via Rcpp and RcppArmadillo, making them orders of magnitude faster than pure R.
+- **Parallel model fitting**: `autoModel` can fit independent ML models in parallel using `mclapply`.
+
+
+# Part VII: Complete Worked Example
+
+This section walks through a complete analysis from start to finish.
+
+```{r complete, eval = FALSE}
+library(RateScape)
+library(ape)
+
+# =========================================================
+# 1. Load data
+# =========================================================
+# Replace with your own tree and data files:
+# tree <- read.tree("my_tree.nwk")
+# dat  <- read.csv("my_traits.csv", row.names = 1)
+
+# For this example, we simulate:
+set.seed(2024)
+tree <- rcoal(150)
+Q_true <- makeQ(k = 3, model = "sym")
+sim <- simRateScape(tree, Q_true,
+                    lambda_sigma = 1.5, pi = 0.3,
+                    nrep = 1, return_rates = TRUE, seed = 2024)
+dat <- sim$data[[1]]
+
+
+# =========================================================
+# 2. Explore model space (quick ML screening)
+# =========================================================
+auto <- autoModel(
+  tree, dat,
+  models = c("mk", "sym", "ard"),
+  rate_models = c("none", "gamma"),
+  criterion = "aicc",
+  seed = 2024
+)
+print(auto)
+# Suppose "sym + gamma" ranks best → confirms rate heterogeneity matters
+
+
+# =========================================================
+# 3. Fit the full Bayesian model
+# =========================================================
+Q_fit <- makeQ(k = 3, model = "sym")
+fit <- fitRateScape(
+  tree, dat, Q = Q_fit,
+  lambda_sigma = 1.5,
+  root_prior = "fitzjohn",
+  ngen = 100000,
+  burn_in = 20000,
+  thin = 50,
+  seed = 2024
+)
+
+
+# =========================================================
+# 4. Check convergence
+# =========================================================
+par(mfrow = c(1, 2))
+
+# Log-likelihood trace
+plot(fit$mcmc_samples$loglik, type = "l",
+     xlab = "Sample", ylab = "Log-likelihood",
+     main = "Log-likelihood trace")
+
+# Proportion of shifted branches over time
+prop_shifted <- rowMeans(fit$mcmc_samples$z)
+plot(prop_shifted, type = "l",
+     xlab = "Sample", ylab = "Prop. shifted",
+     main = "Proportion shifted branches")
+
+par(mfrow = c(1, 1))
+
+
+# =========================================================
+# 5. Summarize and visualize rates
+# =========================================================
+rates <- summarizeRates(fit)
+
+# How many branches have strong evidence of rate shifts?
+sum(rates$prob_shifted > 0.90)
+
+# Visualize on the tree
+plotRateTree(fit, quantile_threshold = 0.80)
+
+
+# =========================================================
+# 6. Posterior predictive check
+# =========================================================
+ppc <- posteriorPredictive(fit, dat, nsim = 500, seed = 2024)
+ppc$p_values
+# All between 0.05 and 0.95? Model is adequate.
+
+
+# =========================================================
+# 7. Stochastic character maps
+# =========================================================
+maps <- simmapRate(fit, nsim = 100, rate_summary = "sample", seed = 2024)
+
+# Use phytools for visualization and summary
+library(phytools)
+plotSimmap(maps[[1]])
+summary(maps)
+
+
+# =========================================================
+# 8. Compare true vs estimated rates (since we simulated)
+# =========================================================
+true_r <- sim$rates[, 1]
+est_r  <- rates$mean_r
+
+cat("Correlation:", cor(true_r, est_r), "\n")
+
+plot(true_r, est_r,
+     xlab = "True rate", ylab = "Estimated rate",
+     pch = 16, col = rgb(0, 0, 0, 0.3),
+     main = paste("r =", round(cor(true_r, est_r), 2)))
+abline(0, 1, col = "red", lwd = 2)
+
+
+# =========================================================
+# 9. Export results
+# =========================================================
+write.csv(rates, "rate_estimates.csv", row.names = FALSE)
+```
+
+
+# Part VIII: Glossary
+
+For readers new to phylogenetic comparative methods, here are key terms used throughout this vignette:
+
+**AIC / AICc / BIC**: Information criteria used to compare models. Lower values indicate a better trade-off between fit and complexity. AICc corrects for small sample sizes. BIC penalizes complexity more heavily.
+
+**Bayesian inference**: A statistical framework where we update our prior beliefs about parameters (the *prior*) with information from the data (the *likelihood*) to get updated beliefs (the *posterior*).
+
+**Burn-in**: The initial portion of an MCMC chain that is discarded because the chain has not yet converged to the target distribution.
+
+**Continuous-time Markov chain (CTMC)**: A mathematical model for a system that transitions between discrete states in continuous time, where the probability of the next state depends only on the current state.
+
+**Credible interval**: The Bayesian analogue of a confidence interval. A 95% credible interval contains the true parameter value with 95% posterior probability.
+
+**Eigendecomposition**: A factorization of the Q matrix ($Q = V \Lambda V^{-1}$) that makes computing the matrix exponential efficient: $e^{Qt} = V e^{\Lambda t} V^{-1}$.
+
+**Felsenstein pruning algorithm**: An efficient algorithm for computing the likelihood of discrete character data on a phylogeny. It works from the tips to the root, combining information at each internal node.
+
+**Log-normal distribution**: A probability distribution where the logarithm of the variable is normally distributed. Always positive, right-skewed, and commonly used for rate multipliers.
+
+**MCMC (Markov chain Monte Carlo)**: A family of algorithms for sampling from complex probability distributions. The chain proposes moves, accepts or rejects them based on how much they improve the fit, and over time builds up a representative sample from the posterior distribution.
+
+**Matrix exponential** ($e^{Qt}$): The mathematical operation that converts instantaneous rates (Q) and branch length ($t$) into transition probabilities. For a branch of length $t$, entry $(i, j)$ of $e^{Qt}$ gives the probability of going from state $i$ to state $j$.
+
+**Posterior distribution**: The probability distribution of parameters after combining prior information with the data. This is what MCMC samples from.
+
+**Posterior inclusion probability (PIP)**: In the context of `fitQstructure`, the probability that a particular transition belongs in the model (is nonzero). Analogous to a variable importance measure in variable selection.
+
+**Prior distribution**: Our beliefs about parameter values before seeing the data. In RateScape, the spike-and-slab prior expresses the belief that most branches evolve at background rate.
+
+**Rate scalar**: A multiplicative factor that scales the Q matrix for a particular branch. $r = 1$ means background rate; $r > 1$ means faster; $r < 1$ means slower.
+
+**Reversible-jump MCMC (RJMCMC)**: An extension of MCMC that can move between models of different dimensionality (e.g., adding or removing transitions from Q).
+
+**Spike-and-slab prior**: A mixture prior with a point mass (spike) at a specific value and a continuous distribution (slab) for deviations. In RateScape, the spike is at $r = 1$ and the slab is log-normal.
+
+**Stationary distribution**: The long-run equilibrium frequencies of the states under Q. If you run the Markov chain for a very long time, the probability of being in each state converges to the stationary distribution, regardless of the starting state.
+
+**Stochastic character map (SIMMAP)**: A simulated history of character evolution along the branches of a phylogeny, consistent with the tip data and the model. Each map specifies exactly where and when state changes occurred.
+
+**Thinning**: Keeping every $n$-th sample from an MCMC chain to reduce autocorrelation and storage requirements.
+
+**Transition rate matrix (Q)**: A square matrix that defines the instantaneous rates of switching between character states. Off-diagonal entries are non-negative rates; diagonal entries are set so rows sum to zero.
+
+
+# Citation
+
+If you use RateScape in your research, please cite:
+
+> Blackmon H. (2026). RateScape: Detecting and explaining rate heterogeneity in discrete character evolution. *Methods in Ecology and Evolution*.
+
+
+# Session info
+
+```{r session, eval = FALSE}
+sessionInfo()
+```

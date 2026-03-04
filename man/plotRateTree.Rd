@@ -3,7 +3,16 @@
 \alias{plotRateTree}
 \alias{plot.ratescapeFit}
 \alias{plot.ratescapeML}
-\title{Plot Rate-Painted Phylogenetic Trees}
+\title{Visualize Evolutionary Rates on a Phylogenetic Tree}
+\description{
+Produces a "rate-painted" phylogeny where each branch is colored according
+to its estimated rate of character evolution. This is the primary
+visualization tool in RateScape: at a glance, you can see which lineages
+are evolving fast (warm colors) and which are evolving slowly (cool colors).
+
+You can call this function directly as \code{plotRateTree(fit)} or use
+the standard R plotting interface with \code{plot(fit)}.
+}
 \usage{
 plotRateTree(
   x,
@@ -19,53 +28,73 @@ plotRateTree(
 \method{plot}{ratescapeML}(x, y = NULL, ...)
 }
 \arguments{
-\item{x}{An object of class "ratescapeFit" or "ratescapeML" (from \code{fitRateScape}
-or \code{rateCategories}).}
+\item{x}{A fitted model from \code{\link{fitRateScape}} (Bayesian) or
+\code{\link{rateCategories}} (ML).}
 
-\item{y}{Unused (for compatibility with plot generic).}
+\item{y}{Unused. Required for compatibility with the generic \code{plot()}
+function.}
 
-\item{quantile_threshold}{Numeric. Posterior probability threshold for identifying
-rate-shifted branches (default 0.5). Only used for Bayesian fits.}
+\item{quantile_threshold}{For Bayesian fits only: the minimum posterior
+probability of a rate shift required to color a branch. Branches below
+this threshold are displayed at the background rate (r = 1). Default
+0.5 means "only color branches that are more likely shifted than not."
+Set to 0 to color all branches by their estimated rate regardless of
+confidence.}
 
-\item{color_palette}{Character. Color scheme: "viridis" (default),
-"diverging" (blue-grey-red), or "sequential" (white-orange-red).}
+\item{color_palette}{Which color scheme to use:
+\itemize{
+  \item \code{"viridis"} (default): A perceptually uniform palette that
+    works well for colorblind viewers. Goes from purple (slow) through
+    green to yellow (fast).
+  \item \code{"diverging"}: Blue (slow) to grey (background, r = 1) to
+    red (fast). Good for emphasizing deviations from the background rate.
+  \item \code{"sequential"}: White (slow) to orange to red (fast). Good
+    when you mainly care about identifying the fastest-evolving branches.
+}
+}
 
-\item{label_shifted}{Logical. If TRUE, label branches with rate shifts. Default is FALSE.}
+\item{label_shifted}{If \code{TRUE}, adds text labels to branches
+identified as having shifted rates. Useful for identifying specific
+branches but can be cluttered on large trees. Default \code{FALSE}.}
 
-\item{...}{Additional arguments passed to \code{\link[ape]{plot.phylo}}.}
+\item{...}{Additional arguments passed to \code{ape::plot.phylo()}. Common
+options include \code{main} (plot title), \code{cex} (tip label size),
+\code{show.tip.label} (TRUE/FALSE), and \code{type} (tree layout:
+"phylogram", "fan", "cladogram").}
 }
 \value{
-Invisibly returns NULL. Called for its side effect of producing a plot.
-}
-\description{
-Produces a phylogenetic tree visualization with branches colored by their
-estimated rate scalars, creating a "painted phylogeny" showing lineage-specific
-rate heterogeneity.
-}
-\details{
-For Bayesian fits: branch colors represent posterior mean r_i estimates.
-Blue = slower (r < 1), red = faster (r > 1), grey = background rate.
-Branches with posterior probability of shift below \code{quantile_threshold}
-are displayed at r = 1 (background).
-
-For ML fits: branch colors represent maximum likelihood rate estimates.
-Color intensity reflects the magnitude of rate deviation from 1.
-
-The diverging palette is centered at 1 (white/grey), with blue for r < 1
-and red for r > 1, making the background rate clearly visible.
+Invisibly returns NULL. The function is called for its side effect of
+producing a plot.
 }
 \examples{
 \dontrun{
-  fit <- fitRateScape(tree, data, Q, lambda_sigma = 1.0)
-  plot(fit, main = "Rate-Painted Tree")
+  # After fitting a Bayesian model:
+  fit <- fitRateScape(tree, data, Q, lambda_sigma = 1.0, ngen = 50000)
 
-  # Or call directly
-  plotRateTree(fit, color_palette = "viridis")
+  # Simple plot (uses viridis palette)
+  plot(fit)
 
+  # Diverging palette with a title
+  plotRateTree(fit, color_palette = "diverging",
+               main = "Rate of diet evolution")
+
+  # Fan layout for large trees, hide tip labels
+  plot(fit, type = "fan", show.tip.label = FALSE,
+       color_palette = "sequential")
+
+  # Be more conservative: only color branches with > 80% probability
+  # of being shifted
+  plotRateTree(fit, quantile_threshold = 0.80)
+
+  # For an ML fit:
   fit_ml <- rateCategories(tree, data, Q)
-  plot(fit_ml, color_palette = "sequential")
+  plot(fit_ml, color_palette = "viridis")
 }
 }
 \seealso{
-\code{\link{fitRateScape}}, \code{\link{rateCategories}}, \code{\link{summarizeRates}}
+\code{\link{fitRateScape}} and \code{\link{rateCategories}} (produce the
+  fits to visualize),
+\code{\link{summarizeRates}} (numerical summaries to go with the plot),
+\code{\link{simmapRate}} (stochastic maps if you want to see the character
+  states, not just rates)
 }
